@@ -1,0 +1,9 @@
+{
+  "asOfLabel": "2026-07-20",
+  "containsBrokerData": false,
+  "containsCredentials": false,
+  "containsPersonalData": false,
+  "description": "Generated locally from the public universe symbols using stable hashes. Values are illustrative and are not market observations.",
+  "kind": "DETERMINISTIC_SYNTHETIC_DEMO",
+  "securityCount": 102
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Aegis Forecast",
+  "version": "1.4.0",
+  "mode": "PAPER",
+  "live_trading_locked": true,
+  "market_scope": {
+    "description": "Current Nasdaq-100 constituent securities",
+    "benchmark": "US.QQQ",
+    "allowed_codes_source": "config/us_universe.json"
+  },
+  "execution": {
+    "sampling_frequency": "1m",
+    "decision_frequency": "5m",
+    "minimum_holding_rule": "US_MARKET_RULES",
+    "paper_only": true,
+    "simulation_execution_opt_in": true,
+    "real_order_adapter": "DISABLED"
+  },
+  "broker": {
+    "primary_adapter": "MOOMOO_OPEND",
+    "trade_environment": "SIMULATE",
+    "server_role": "ALWAYS_ON_ENGINE",
+    "mac_role": "REALTIME_MONITORING_CONSOLE"
+  }
+}

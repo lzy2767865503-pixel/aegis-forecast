@@ -1,0 +1,43 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.venv*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+frontend/node_modules/
+frontend/dist/
+
+# Runtime state and broker-derived data are never published.
+storage/
+*.db
+*.db-*
+*.sqlite*
+*.log
+
+# Local deployment files contain machine-specific paths.
+launchd/
+bin/
+archive/
+output/
+design/
+
+# Local legacy A-share experiments are outside the public Nasdaq-100 product.
+bridge/
+backend/aegis_quant/paper.py
+backend/aegis_quant/risk.py
+backend/aegis_quant/universe.py
+config/risk.json
+
+# Resume and other personal artifacts stay outside the repository.
+*.pdf
+*.docx
+*.pem
+*.key
+*.p12
+*.mobileprovision

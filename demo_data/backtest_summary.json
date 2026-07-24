@@ -1,0 +1,20 @@
+{
+  "average_excess_return": 0.0038,
+  "average_names_per_signal_week": 5.0,
+  "average_net_return": 0.0042,
+  "average_threshold": 62.0,
+  "baseline_up_rate": 0.51,
+  "brier_score": 0.251,
+  "dataset": "DETERMINISTIC_SYNTHETIC_DEMO",
+  "ece_5bin": 0.072,
+  "evaluated_signal_count": 300,
+  "lift_vs_baseline": 1.0457,
+  "median_net_return": 0.0031,
+  "precision_action": 0.31,
+  "precision_lcb_95": 0.4768,
+  "precision_up": 0.5333,
+  "profit_factor": 1.18,
+  "signal_basket_max_drawdown": -0.142,
+  "signal_count": 300,
+  "weeks_with_signals": 60
+}

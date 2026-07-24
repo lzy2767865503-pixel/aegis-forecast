@@ -1,0 +1,1036 @@
+{
+  "market": "US",
+  "index": "NASDAQ-100",
+  "index_symbol": "NDX",
+  "benchmark": "US.QQQ",
+  "prediction_horizon_days": 5,
+  "execution": "MOOMOO_SIMULATE_ONLY",
+  "official_source": "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+  "constituent_as_of": "Jul 20, 2026 10:23 AM",
+  "retrieved_at": "2026-07-20T14:24:09.624489+00:00",
+  "constituent_company_count": 100,
+  "constituent_security_count": 102,
+  "ranking_method": "AEGIS_CURRENT_TECHNICAL_MODEL",
+  "securities": [
+    {
+      "ticker": "AAPL",
+      "code": "US.AAPL",
+      "name": "Apple Inc.",
+      "name_en": "Apple Inc.",
+      "official_name": "Apple Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AMAT",
+      "code": "US.AMAT",
+      "name": "Applied Materials, Inc.",
+      "name_en": "Applied Materials, Inc.",
+      "official_name": "Applied Materials, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AMGN",
+      "code": "US.AMGN",
+      "name": "Amgen Inc.",
+      "name_en": "Amgen Inc.",
+      "official_name": "Amgen Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CMCSA",
+      "code": "US.CMCSA",
+      "name": "Comcast Corporation",
+      "name_en": "Comcast Corporation",
+      "official_name": "Comcast Corporation Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "INTC",
+      "code": "US.INTC",
+      "name": "Intel Corporation",
+      "name_en": "Intel Corporation",
+      "official_name": "Intel Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "KLAC",
+      "code": "US.KLAC",
+      "name": "KLA Corporation",
+      "name_en": "KLA Corporation",
+      "official_name": "KLA Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PCAR",
+      "code": "US.PCAR",
+      "name": "PACCAR Inc.",
+      "name_en": "PACCAR Inc.",
+      "official_name": "PACCAR Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CTAS",
+      "code": "US.CTAS",
+      "name": "Cintas Corporation",
+      "name_en": "Cintas Corporation",
+      "official_name": "Cintas Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PAYX",
+      "code": "US.PAYX",
+      "name": "Paychex, Inc.",
+      "name_en": "Paychex, Inc.",
+      "official_name": "Paychex, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "LRCX",
+      "code": "US.LRCX",
+      "name": "Lam Research Corporation",
+      "name_en": "Lam Research Corporation",
+      "official_name": "Lam Research Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ADSK",
+      "code": "US.ADSK",
+      "name": "Autodesk, Inc.",
+      "name_en": "Autodesk, Inc.",
+      "official_name": "Autodesk, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ROST",
+      "code": "US.ROST",
+      "name": "Ross Stores, Inc.",
+      "name_en": "Ross Stores, Inc.",
+      "official_name": "Ross Stores, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MNST",
+      "code": "US.MNST",
+      "name": "Monster Beverage Corporation",
+      "name_en": "Monster Beverage Corporation",
+      "official_name": "Monster Beverage Corporation",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MSFT",
+      "code": "US.MSFT",
+      "name": "Microsoft Corporation",
+      "name_en": "Microsoft Corporation",
+      "official_name": "Microsoft Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ADBE",
+      "code": "US.ADBE",
+      "name": "Adobe Inc.",
+      "name_en": "Adobe Inc.",
+      "official_name": "Adobe Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "FAST",
+      "code": "US.FAST",
+      "name": "Fastenal Company",
+      "name_en": "Fastenal Company",
+      "official_name": "Fastenal Company Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "EA",
+      "code": "US.EA",
+      "name": "Electronic Arts Inc.",
+      "name_en": "Electronic Arts Inc.",
+      "official_name": "Electronic Arts Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CSCO",
+      "code": "US.CSCO",
+      "name": "Cisco Systems, Inc.",
+      "name_en": "Cisco Systems, Inc.",
+      "official_name": "Cisco Systems, Inc. Common Stock (DE)",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "REGN",
+      "code": "US.REGN",
+      "name": "Regeneron Pharmaceuticals, Inc.",
+      "name_en": "Regeneron Pharmaceuticals, Inc.",
+      "official_name": "Regeneron Pharmaceuticals, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "IDXX",
+      "code": "US.IDXX",
+      "name": "IDEXX Laboratories, Inc.",
+      "name_en": "IDEXX Laboratories, Inc.",
+      "official_name": "IDEXX Laboratories, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "VRTX",
+      "code": "US.VRTX",
+      "name": "Vertex Pharmaceuticals Incorporated",
+      "name_en": "Vertex Pharmaceuticals Incorporated",
+      "official_name": "Vertex Pharmaceuticals Incorporated Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ODFL",
+      "code": "US.ODFL",
+      "name": "Old Dominion Freight Line, Inc.",
+      "name_en": "Old Dominion Freight Line, Inc.",
+      "official_name": "Old Dominion Freight Line, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "QCOM",
+      "code": "US.QCOM",
+      "name": "QUALCOMM Incorporated",
+      "name_en": "QUALCOMM Incorporated",
+      "official_name": "QUALCOMM Incorporated Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "GILD",
+      "code": "US.GILD",
+      "name": "Gilead Sciences, Inc.",
+      "name_en": "Gilead Sciences, Inc.",
+      "official_name": "Gilead Sciences, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "SNPS",
+      "code": "US.SNPS",
+      "name": "Synopsys, Inc.",
+      "name_en": "Synopsys, Inc.",
+      "official_name": "Synopsys, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "SBUX",
+      "code": "US.SBUX",
+      "name": "Starbucks Corporation",
+      "name_en": "Starbucks Corporation",
+      "official_name": "Starbucks Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "INTU",
+      "code": "US.INTU",
+      "name": "Intuit Inc.",
+      "name_en": "Intuit Inc.",
+      "official_name": "Intuit Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MCHP",
+      "code": "US.MCHP",
+      "name": "Microchip Technology Incorporated",
+      "name_en": "Microchip Technology Incorporated",
+      "official_name": "Microchip Technology Incorporated Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ORLY",
+      "code": "US.ORLY",
+      "name": "O'Reilly Automotive, Inc.",
+      "name_en": "O'Reilly Automotive, Inc.",
+      "official_name": "O'Reilly Automotive, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "COST",
+      "code": "US.COST",
+      "name": "Costco Wholesale Corporation",
+      "name_en": "Costco Wholesale Corporation",
+      "official_name": "Costco Wholesale Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CPRT",
+      "code": "US.CPRT",
+      "name": "Copart, Inc.",
+      "name_en": "Copart, Inc.",
+      "official_name": "Copart, Inc. (DE) Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ASML",
+      "code": "US.ASML",
+      "name": "ASML Holding N.V.",
+      "name_en": "ASML Holding N.V.",
+      "official_name": "ASML Holding N.V. New York Registry Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TTWO",
+      "code": "US.TTWO",
+      "name": "Take-Two Interactive Software, Inc.",
+      "name_en": "Take-Two Interactive Software, Inc.",
+      "official_name": "Take-Two Interactive Software, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AMZN",
+      "code": "US.AMZN",
+      "name": "Amazon.com, Inc.",
+      "name_en": "Amazon.com, Inc.",
+      "official_name": "Amazon.com, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MSTR",
+      "code": "US.MSTR",
+      "name": "Strategy Inc",
+      "name_en": "Strategy Inc",
+      "official_name": "Strategy Inc Common Stock Class A",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "NVDA",
+      "code": "US.NVDA",
+      "name": "NVIDIA Corporation",
+      "name_en": "NVIDIA Corporation",
+      "official_name": "NVIDIA Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "BKNG",
+      "code": "US.BKNG",
+      "name": "Booking Holdings Inc.",
+      "name_en": "Booking Holdings Inc.",
+      "official_name": "Booking Holdings Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ISRG",
+      "code": "US.ISRG",
+      "name": "Intuitive Surgical, Inc.",
+      "name_en": "Intuitive Surgical, Inc.",
+      "official_name": "Intuitive Surgical, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MRVL",
+      "code": "US.MRVL",
+      "name": "Marvell Technology, Inc.",
+      "name_en": "Marvell Technology, Inc.",
+      "official_name": "Marvell Technology, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ADI",
+      "code": "US.ADI",
+      "name": "Analog Devices, Inc.",
+      "name_en": "Analog Devices, Inc.",
+      "official_name": "Analog Devices, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AEP",
+      "code": "US.AEP",
+      "name": "American Electric Power Company, Inc.",
+      "name_en": "American Electric Power Company, Inc.",
+      "official_name": "American Electric Power Company, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AMD",
+      "code": "US.AMD",
+      "name": "Advanced Micro Devices, Inc.",
+      "name_en": "Advanced Micro Devices, Inc.",
+      "official_name": "Advanced Micro Devices, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ADP",
+      "code": "US.ADP",
+      "name": "Automatic Data Processing, Inc.",
+      "name_en": "Automatic Data Processing, Inc.",
+      "official_name": "Automatic Data Processing, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CDNS",
+      "code": "US.CDNS",
+      "name": "Cadence Design Systems, Inc.",
+      "name_en": "Cadence Design Systems, Inc.",
+      "official_name": "Cadence Design Systems, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CSX",
+      "code": "US.CSX",
+      "name": "CSX Corporation",
+      "name_en": "CSX Corporation",
+      "official_name": "CSX Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "HON",
+      "code": "US.HON",
+      "name": "Honeywell International Inc.",
+      "name_en": "Honeywell International Inc.",
+      "official_name": "Honeywell International Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MAR",
+      "code": "US.MAR",
+      "name": "Marriott International",
+      "name_en": "Marriott International",
+      "official_name": "Marriott International Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MU",
+      "code": "US.MU",
+      "name": "Micron Technology, Inc.",
+      "name_en": "Micron Technology, Inc.",
+      "official_name": "Micron Technology, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "XEL",
+      "code": "US.XEL",
+      "name": "Xcel Energy Inc.",
+      "name_en": "Xcel Energy Inc.",
+      "official_name": "Xcel Energy Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "EXC",
+      "code": "US.EXC",
+      "name": "Exelon Corporation",
+      "name_en": "Exelon Corporation",
+      "official_name": "Exelon Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PEP",
+      "code": "US.PEP",
+      "name": "PepsiCo, Inc.",
+      "name_en": "PepsiCo, Inc.",
+      "official_name": "PepsiCo, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ROP",
+      "code": "US.ROP",
+      "name": "Roper Technologies, Inc.",
+      "name_en": "Roper Technologies, Inc.",
+      "official_name": "Roper Technologies, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TER",
+      "code": "US.TER",
+      "name": "Teradyne, Inc.",
+      "name_en": "Teradyne, Inc.",
+      "official_name": "Teradyne, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TXN",
+      "code": "US.TXN",
+      "name": "Texas Instruments Incorporated",
+      "name_en": "Texas Instruments Incorporated",
+      "official_name": "Texas Instruments Incorporated Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "WDC",
+      "code": "US.WDC",
+      "name": "Western Digital Corporation",
+      "name_en": "Western Digital Corporation",
+      "official_name": "Western Digital Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "WMT",
+      "code": "US.WMT",
+      "name": "Walmart Inc.",
+      "name_en": "Walmart Inc.",
+      "official_name": "Walmart Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AXON",
+      "code": "US.AXON",
+      "name": "Axon Enterprise, Inc.",
+      "name_en": "Axon Enterprise, Inc.",
+      "official_name": "Axon Enterprise, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MDLZ",
+      "code": "US.MDLZ",
+      "name": "Mondelez International, Inc.",
+      "name_en": "Mondelez International, Inc.",
+      "official_name": "Mondelez International, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "NFLX",
+      "code": "US.NFLX",
+      "name": "Netflix, Inc.",
+      "name_en": "Netflix, Inc.",
+      "official_name": "Netflix, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "STX",
+      "code": "US.STX",
+      "name": "Seagate Technology Holdings PLC",
+      "name_en": "Seagate Technology Holdings PLC",
+      "official_name": "Seagate Technology Holdings PLC Ordinary Shares (Ireland)",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ALNY",
+      "code": "US.ALNY",
+      "name": "Alnylam Pharmaceuticals, Inc.",
+      "name_en": "Alnylam Pharmaceuticals, Inc.",
+      "official_name": "Alnylam Pharmaceuticals, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "GOOGL",
+      "code": "US.GOOGL",
+      "name": "Alphabet Inc.",
+      "name_en": "Alphabet Inc.",
+      "official_name": "Alphabet Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MPWR",
+      "code": "US.MPWR",
+      "name": "Monolithic Power Systems, Inc.",
+      "name_en": "Monolithic Power Systems, Inc.",
+      "official_name": "Monolithic Power Systems, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "DXCM",
+      "code": "US.DXCM",
+      "name": "DexCom, Inc.",
+      "name_en": "DexCom, Inc.",
+      "official_name": "DexCom, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TMUS",
+      "code": "US.TMUS",
+      "name": "T-Mobile US, Inc.",
+      "name_en": "T-Mobile US, Inc.",
+      "official_name": "T-Mobile US, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "MELI",
+      "code": "US.MELI",
+      "name": "MercadoLibre, Inc.",
+      "name_en": "MercadoLibre, Inc.",
+      "official_name": "MercadoLibre, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "KDP",
+      "code": "US.KDP",
+      "name": "Keurig Dr Pepper Inc.",
+      "name_en": "Keurig Dr Pepper Inc.",
+      "official_name": "Keurig Dr Pepper Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "NBIS",
+      "code": "US.NBIS",
+      "name": "Nebius Group N.V. Class A",
+      "name_en": "Nebius Group N.V. Class A",
+      "official_name": "Nebius Group N.V. Class A Ordinary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "AVGO",
+      "code": "US.AVGO",
+      "name": "Broadcom Inc.",
+      "name_en": "Broadcom Inc.",
+      "official_name": "Broadcom Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "FTNT",
+      "code": "US.FTNT",
+      "name": "Fortinet, Inc.",
+      "name_en": "Fortinet, Inc.",
+      "official_name": "Fortinet, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TSLA",
+      "code": "US.TSLA",
+      "name": "Tesla, Inc.",
+      "name_en": "Tesla, Inc.",
+      "official_name": "Tesla, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "NXPI",
+      "code": "US.NXPI",
+      "name": "NXP Semiconductors N.V.",
+      "name_en": "NXP Semiconductors N.V.",
+      "official_name": "NXP Semiconductors N.V. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "FANG",
+      "code": "US.FANG",
+      "name": "Diamondback Energy, Inc.",
+      "name_en": "Diamondback Energy, Inc.",
+      "official_name": "Diamondback Energy, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "META",
+      "code": "US.META",
+      "name": "Meta Platforms, Inc.",
+      "name_en": "Meta Platforms, Inc.",
+      "official_name": "Meta Platforms, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PANW",
+      "code": "US.PANW",
+      "name": "Palo Alto Networks, Inc.",
+      "name_en": "Palo Alto Networks, Inc.",
+      "official_name": "Palo Alto Networks, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "WDAY",
+      "code": "US.WDAY",
+      "name": "Workday, Inc.",
+      "name_en": "Workday, Inc.",
+      "official_name": "Workday, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "GOOG",
+      "code": "US.GOOG",
+      "name": "Alphabet Inc. Class C Capital Stock",
+      "name_en": "Alphabet Inc. Class C Capital Stock",
+      "official_name": "Alphabet Inc. Class C Capital Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PYPL",
+      "code": "US.PYPL",
+      "name": "PayPal Holdings, Inc.",
+      "name_en": "PayPal Holdings, Inc.",
+      "official_name": "PayPal Holdings, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "SHOP",
+      "code": "US.SHOP",
+      "name": "Shopify Inc.",
+      "name_en": "Shopify Inc.",
+      "official_name": "Shopify Inc. Class A Subordinate Voting Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "KHC",
+      "code": "US.KHC",
+      "name": "The Kraft Heinz Company",
+      "name_en": "The Kraft Heinz Company",
+      "official_name": "The Kraft Heinz Company Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "LITE",
+      "code": "US.LITE",
+      "name": "Lumentum Holdings Inc.",
+      "name_en": "Lumentum Holdings Inc.",
+      "official_name": "Lumentum Holdings Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CCEP",
+      "code": "US.CCEP",
+      "name": "Coca-Cola Europacific Partners plc",
+      "name_en": "Coca-Cola Europacific Partners plc",
+      "official_name": "Coca-Cola Europacific Partners plc Ordinary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "BKR",
+      "code": "US.BKR",
+      "name": "Baker Hughes Company",
+      "name_en": "Baker Hughes Company",
+      "official_name": "Baker Hughes Company Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PDD",
+      "code": "US.PDD",
+      "name": "PDD Holdings Inc.",
+      "name_en": "PDD Holdings Inc.",
+      "official_name": "PDD Holdings Inc. American Depositary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CRWD",
+      "code": "US.CRWD",
+      "name": "CrowdStrike Holdings, Inc.",
+      "name_en": "CrowdStrike Holdings, Inc.",
+      "official_name": "CrowdStrike Holdings, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "DDOG",
+      "code": "US.DDOG",
+      "name": "Datadog, Inc.",
+      "name_en": "Datadog, Inc.",
+      "official_name": "Datadog, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "RKLB",
+      "code": "US.RKLB",
+      "name": "Rocket Lab Corporation",
+      "name_en": "Rocket Lab Corporation",
+      "official_name": "Rocket Lab Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "PLTR",
+      "code": "US.PLTR",
+      "name": "Palantir Technologies Inc.",
+      "name_en": "Palantir Technologies Inc.",
+      "official_name": "Palantir Technologies Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ABNB",
+      "code": "US.ABNB",
+      "name": "Airbnb, Inc.",
+      "name_en": "Airbnb, Inc.",
+      "official_name": "Airbnb, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "DASH",
+      "code": "US.DASH",
+      "name": "DoorDash, Inc.",
+      "name_en": "DoorDash, Inc.",
+      "official_name": "DoorDash, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "APP",
+      "code": "US.APP",
+      "name": "Applovin Corporation",
+      "name_en": "Applovin Corporation",
+      "official_name": "Applovin Corporation Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CEG",
+      "code": "US.CEG",
+      "name": "Constellation Energy Corporation",
+      "name_en": "Constellation Energy Corporation",
+      "official_name": "Constellation Energy Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "WBD",
+      "code": "US.WBD",
+      "name": "Warner Bros. Discovery, Inc.",
+      "name_en": "Warner Bros. Discovery, Inc.",
+      "official_name": "Warner Bros. Discovery, Inc. Series A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "GEHC",
+      "code": "US.GEHC",
+      "name": "GE HealthCare Technologies Inc.",
+      "name_en": "GE HealthCare Technologies Inc.",
+      "official_name": "GE HealthCare Technologies Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "LIN",
+      "code": "US.LIN",
+      "name": "Linde plc",
+      "name_en": "Linde plc",
+      "official_name": "Linde plc Ordinary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ARM",
+      "code": "US.ARM",
+      "name": "Arm Holdings plc",
+      "name_en": "Arm Holdings plc",
+      "official_name": "Arm Holdings plc American Depositary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "TRI",
+      "code": "US.TRI",
+      "name": "Thomson Reuters Corporation",
+      "name_en": "Thomson Reuters Corporation",
+      "official_name": "Thomson Reuters Corporation Common Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "FER",
+      "code": "US.FER",
+      "name": "Ferrovial N.V.",
+      "name_en": "Ferrovial N.V.",
+      "official_name": "Ferrovial N.V. Ordinary Shares",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "ALAB",
+      "code": "US.ALAB",
+      "name": "Astera Labs, Inc.",
+      "name_en": "Astera Labs, Inc.",
+      "official_name": "Astera Labs, Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "SNDK",
+      "code": "US.SNDK",
+      "name": "Sandisk Corporation",
+      "name_en": "Sandisk Corporation",
+      "official_name": "Sandisk Corporation Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "CRWV",
+      "code": "US.CRWV",
+      "name": "CoreWeave, Inc.",
+      "name_en": "CoreWeave, Inc.",
+      "official_name": "CoreWeave, Inc. Class A Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    },
+    {
+      "ticker": "HONA",
+      "code": "US.HONA",
+      "name": "Honeywell Aerospace Inc.",
+      "name_en": "Honeywell Aerospace Inc.",
+      "official_name": "Honeywell Aerospace Inc. Common Stock",
+      "group": "NASDAQ100",
+      "tradable": true,
+      "data_available": true
+    }
+  ]
+}
