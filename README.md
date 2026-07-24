@@ -3,6 +3,9 @@
 **A privacy-safe, simulation-only Nasdaq-100 quantitative research
 workstation.**
 
+**Created and maintained by
+[LAI ZEYU](https://github.com/lzy2767865503-pixel).**
+
 Aegis Forecast combines a Python research engine, deterministic technical
 factor ranking, walk-forward model evaluation, a React monitoring console,
 hash-chained audit records and an optional Moomoo OpenD simulation adapter.
@@ -146,6 +149,11 @@ See [Architecture](docs/ARCHITECTURE.md),
 [Model Card](docs/MODEL_CARD.md),
 [Reproducibility](docs/REPRODUCIBILITY.md) and
 [Privacy](docs/PRIVACY.md).
+
+## Author
+
+Designed, engineered and published by
+[LAI ZEYU](https://github.com/lzy2767865503-pixel).
 
 ## License
 

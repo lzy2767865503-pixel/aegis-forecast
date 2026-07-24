@@ -45,6 +45,7 @@ export default function Sidebar({ active, onChange }) {
       <div className="sidebar-scope">
         <strong>SIMULATION ONLY</strong>
         <span>真实盘永久锁定</span>
+        <span>Built by LAI ZEYU</span>
       </div>
     </aside>
   )

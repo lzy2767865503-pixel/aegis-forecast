@@ -161,6 +161,7 @@ export default function App() {
           <span>预测周期：5个交易日</span>
           <span>数据：<b>{data.status?.system?.demoData ? '合成演示' : data.moomoo?.connected ? 'Moomoo模拟盘' : '等待OpenD'}</b></span>
           <span>后台：<b>{data.autonomy?.healthy ? '30秒心跳正常' : '检查中'}</b></span>
+          <span>Built by <b>LAI ZEYU</b></span>
           <strong>真实盘永久禁用 · 不构成投资建议</strong>
         </footer>
       </div>
