@@ -18,6 +18,7 @@ accepts only the `SIMULATE` environment.
 
 ## Reporting a vulnerability
 
-Open a private GitHub security advisory. Do not include account numbers,
-credentials, private keys, customer information or live trading data in a
-public issue.
+Use GitHub's
+[private vulnerability reporting form](https://github.com/lzy2767865503-pixel/aegis-forecast/security/advisories/new).
+Do not include account numbers, credentials, private keys, customer information
+or live trading data in a public issue.

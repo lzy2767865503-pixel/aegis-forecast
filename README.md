@@ -69,13 +69,15 @@ flowchart LR
 
 Prerequisites:
 
-- Python 3.10+
-- Node.js 20+
-- pnpm 10+
+- Python 3.10+ (`3.12.13` is recorded in `.python-version`)
+- Node.js 20+ (`22.23.1` is recorded in `.nvmrc`)
+- pnpm 10+ (`10.34.5` is recorded in `frontend/package.json`)
 
 ```bash
 git clone https://github.com/lzy2767865503-pixel/aegis-forecast.git
 cd aegis-forecast
+corepack enable
+corepack prepare pnpm@10.34.5 --activate
 ./scripts/setup.sh
 ./scripts/run.sh
 ```
@@ -107,6 +109,10 @@ environment:
 ./scripts/setup.sh --with-moomoo
 cp .env.example .env
 ```
+
+The application safely reads the root `.env` without executing it as shell
+code. Variables already exported by the operator take precedence over `.env`
+values. Do not commit `.env`.
 
 Keep OpenD on `127.0.0.1:11111`. Credentials and trade-unlock secrets stay
 inside OpenD; this application never accepts them.
