@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from aegis_quant.audit import AuditLedger
 from aegis_quant.autonomy import AutonomyMonitor
+from aegis_quant.environment import load_project_env
 from aegis_quant.learning import LearningRegistry
 from aegis_quant.moomoo_gateway import GatewayConfig, MoomooSimulationGateway
 from aegis_quant.nasdaq100_universe import load_universe_config
@@ -85,6 +86,45 @@ class AuditAndRuntimeTests(unittest.TestCase):
                 os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
             else:
                 os.environ["AEGIS_ENABLE_SIMULATION_EXECUTION"] = previous
+
+    def test_dotenv_loader_is_safe_and_preserves_exported_values(self) -> None:
+        preserved_key = "AEGIS_TEST_PRESERVED"
+        loaded_key = "AEGIS_TEST_LOADED"
+        quoted_key = "AEGIS_TEST_QUOTED"
+        previous = {
+            key: os.environ.get(key)
+            for key in (preserved_key, loaded_key, quoted_key)
+        }
+        try:
+            os.environ[preserved_key] = "from-process"
+            os.environ.pop(loaded_key, None)
+            os.environ.pop(quoted_key, None)
+            with tempfile.TemporaryDirectory() as tempdir:
+                env_path = Path(tempdir) / ".env"
+                env_path.write_text(
+                    "\n".join(
+                        [
+                            f"{preserved_key}=from-file",
+                            f"export {loaded_key}=enabled # documented comment",
+                            f'{quoted_key}="value with spaces" # quoted comment',
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                loaded = load_project_env(env_path)
+
+            self.assertEqual(os.environ[preserved_key], "from-process")
+            self.assertEqual(os.environ[loaded_key], "enabled")
+            self.assertEqual(os.environ[quoted_key], "value with spaces")
+            self.assertNotIn(preserved_key, loaded)
+            self.assertEqual(loaded[loaded_key], "enabled")
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_autonomy_heartbeat_is_persisted_without_a_browser(self) -> None:
         state_path = Path(self.tempdir.name) / "autonomy.json"

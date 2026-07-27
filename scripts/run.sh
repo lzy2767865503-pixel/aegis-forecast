@@ -5,6 +5,12 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
+runtime_python="${PYTHON:-python3}"
+if [[ -x .venv/bin/python ]]; then
+  runtime_python="./.venv/bin/python"
+fi
+./scripts/check_versions.sh "$runtime_python"
+
 if [[ ! -x .venv/bin/python || ! -f frontend/dist/index.html ]]; then
   ./scripts/setup.sh
 fi

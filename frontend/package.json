@@ -2,6 +2,11 @@
   "name": "aegis-a-workstation",
   "private": true,
   "version": "1.4.0",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5174",

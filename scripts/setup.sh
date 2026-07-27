@@ -6,25 +6,20 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
 python_command="${PYTHON:-python3}"
-if ! command -v "$python_command" >/dev/null 2>&1; then
-  echo "Python 3.10 or newer is required." >&2
-  exit 1
+if [[ -x .venv/bin/python ]]; then
+  python_command="./.venv/bin/python"
 fi
+./scripts/check_versions.sh "$python_command"
 
 if [[ ! -x .venv/bin/python ]]; then
   "$python_command" -m venv .venv
 fi
 
-./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install --upgrade "pip==25.3"
 if [[ "${1:-}" == "--with-moomoo" ]]; then
-  ./.venv/bin/python -m pip install -r requirements-moomoo.txt
+  ./.venv/bin/python -m pip install -r requirements-moomoo.lock.txt
 else
-  ./.venv/bin/python -m pip install -r requirements.txt
-fi
-
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "pnpm 10 or newer is required to build the dashboard." >&2
-  exit 1
+  ./.venv/bin/python -m pip install -r requirements.lock.txt
 fi
 
 pnpm --dir frontend install --frozen-lockfile
