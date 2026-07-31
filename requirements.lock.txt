@@ -1,6 +1,6 @@
 # Fully pinned runtime dependency set for deterministic public-demo installs.
 # Update intentionally with a reviewed dependency PR.
-numpy==2.0.2
+numpy==2.2.6
 pandas==2.2.3
 python-dateutil==2.9.0.post0
 pytz==2026.3.post1
