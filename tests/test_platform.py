@@ -16,7 +16,7 @@ from aegis_quant.learning import LearningRegistry
 from aegis_quant.moomoo_gateway import GatewayConfig, MoomooSimulationGateway
 from aegis_quant.nasdaq100_universe import load_universe_config
 from aegis_quant.pnl_ledger import PnLLedger
-from aegis_quant.server import simulation_execution_enabled
+from aegis_quant.server import bounded_query_int, simulation_execution_enabled
 from aegis_quant.service import DATA_MODE, DEMO_MODEL_ROOT
 from aegis_quant.t_trader import SimulationTTrader
 
@@ -86,6 +86,17 @@ class AuditAndRuntimeTests(unittest.TestCase):
                 os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
             else:
                 os.environ["AEGIS_ENABLE_SIMULATION_EXECUTION"] = previous
+
+    def test_query_limits_are_validated_before_service_execution(self) -> None:
+        self.assertEqual(bounded_query_int({}, "limit", 100, 1, 500), 100)
+        self.assertEqual(
+            bounded_query_int({"limit": ["8"]}, "limit", 100, 1, 500),
+            8,
+        )
+        with self.assertRaisesRegex(ValueError, "must be an integer"):
+            bounded_query_int({"limit": ["many"]}, "limit", 100, 1, 500)
+        with self.assertRaisesRegex(ValueError, "between 1 and 500"):
+            bounded_query_int({"limit": ["0"]}, "limit", 100, 1, 500)
 
     def test_dotenv_loader_is_safe_and_preserves_exported_values(self) -> None:
         preserved_key = "AEGIS_TEST_PRESERVED"
