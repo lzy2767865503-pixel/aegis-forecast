@@ -17,6 +17,23 @@ from .paths import FRONTEND_DIST, ensure_directories
 from .service import AegisService
 
 
+def bounded_query_int(
+    query: dict[str, list[str]],
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = query.get(name, [str(default)])[0]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def simulation_execution_enabled() -> bool:
     return os.environ.get("AEGIS_ENABLE_SIMULATION_EXECUTION", "0").strip().lower() in {
         "1",
@@ -73,10 +90,11 @@ class AegisHandler(BaseHTTPRequestHandler):
             "/api/autonomy": lambda: self.autonomy.snapshot() if self.autonomy else {"engineState": "STARTING"},
             "/api/status": self.service.status,
             "/api/signals": lambda: self.service.signals(
-                int(query.get("limit", [100])[0])
+                bounded_query_int(query, "limit", 100, 1, 500)
             ),
             "/api/universe": lambda: self.service.universe(
-                query.get("q", [""])[0], int(query.get("limit", [100])[0])
+                query.get("q", [""])[0],
+                bounded_query_int(query, "limit", 100, 1, 500),
             ),
             "/api/learning": self.service.learning.status,
             "/api/audit": self.service.audit_events,
@@ -90,6 +108,8 @@ class AegisHandler(BaseHTTPRequestHandler):
         if parsed.path in routes:
             try:
                 self._json(routes[parsed.path]())
+            except (TypeError, ValueError) as exc:
+                self._json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self._json({"ok": False, "error": str(exc)}, 500)
             return
