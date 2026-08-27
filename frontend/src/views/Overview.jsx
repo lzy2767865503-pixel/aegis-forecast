@@ -6,13 +6,12 @@ import SignalTable from '../components/SignalTable'
 import StatusBand from '../components/StatusBand'
 
 export default function Overview({ data, actions }) {
-  const demo = Boolean(data.status?.system?.demoData)
   return (
     <>
       <div className="page-heading">
-        <div><h1>Nasdaq-100量化中心</h1><p>进攻型纯技术面排名 · 当前全部成分证券 · 未来5个交易日</p></div>
+        <div><h1>Nasdaq-100 说明性合成情景</h1><p>2026-08-26 成分快照 · 稳定哈希生成 · 无历史行情、无模型训练</p></div>
         <div className="mode-label">
-          {demo ? '合成演示数据 · 不代表真实行情' : 'Moomoo 模拟盘 · 真实盘禁用'}
+          确定性合成演示 · 非真实行情
         </div>
       </div>
       <StatusBand status={data.status} />
@@ -22,7 +21,7 @@ export default function Overview({ data, actions }) {
       </div>
       <div className="dashboard-secondary">
         <EvidenceChart performance={data.performance} />
-        <LearningConsole learning={data.learning} />
+        <LearningConsole integrity={data.integrity} />
         <DataTrace status={data.status} audit={data.audit} />
       </div>
     </>

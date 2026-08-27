@@ -1,21 +1,20 @@
 import { Activity, BarChart3, Database, Gauge, ListChecks } from 'lucide-react'
 
 export default function MarketGate({ status, performance }) {
-  const market = status?.market || {}
+  const scenario = status?.scenario || {}
   const coverage = status?.coverage || {}
-  const state = market.state || 'NOT READY'
-  const panic = state === 'PANIC' || state === 'RISK_OFF'
-  const blocked = panic || state === 'NOT_READY'
+  const state = scenario.state || 'NOT READY'
+  const blocked = state === 'NOT_READY'
   const checks = [
-    [BarChart3, '纳指趋势', blocked ? '待数据' : '通过', !blocked],
-    [Activity, '白名单宽度', blocked ? '待数据' : '观察', !blocked],
-    [Gauge, '波动状态', panic ? '高风险' : blocked ? '待数据' : '正常', !blocked],
-    [Database, '数据覆盖', `${(coverage.coveragePct || 0).toFixed(1)}%`, coverage.fullMarketReady],
-    [ListChecks, '样本外精度', performance?.posture === 'MONITORING' ? '监控中' : '不足', performance?.posture === 'MONITORING'],
+    [BarChart3, '生成标签', blocked ? '待文件' : '已载入', !blocked],
+    [Activity, '说明性选择规则', blocked ? '待文件' : '可复现', !blocked],
+    [Gauge, '生成变化维度', blocked ? '待文件' : '说明性', !blocked],
+    [Database, '情景证券覆盖', `${(coverage.coveragePct || 0).toFixed(1)}%`, coverage.fullScenarioReady],
+    [ListChecks, '逐行指标重算', performance?.posture === 'ILLUSTRATIVE_ONLY' ? '一致' : '待检查', performance?.posture === 'ILLUSTRATIVE_ONLY'],
   ]
   return (
     <section className="panel market-gate">
-      <div className="panel-heading"><div><h2>市场状态与模型闸门</h2><p>任一硬门失败，模型主动弃权</p></div></div>
+      <div className="panel-heading"><div><h2>说明性情景规则</h2><p>稳定哈希生成，仅演示透明筛选逻辑</p></div></div>
       <div className={`regime-gauge ${blocked ? 'panic' : 'normal'}`}>
         <div className="regime-arc"><span>{state}</span></div>
       </div>
@@ -25,7 +24,7 @@ export default function MarketGate({ status, performance }) {
         ))}
       </div>
       <div className={`gate-conclusion ${blocked ? 'blocked' : ''}`}>
-        {state === 'NOT_READY' ? '等待 Moomoo 历史行情：当前不输出预测' : panic ? '市场门关闭：本期不输出高置信做多信号' : '市场门开放：仍需通过概率与样本门槛'}
+        {state === 'NOT_READY' ? '说明性生成文件尚未就绪' : '情景规则可复现；不代表市场判断或行动建议'}
       </div>
     </section>
   )

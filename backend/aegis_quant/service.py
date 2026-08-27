@@ -3,9 +3,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-import os
-import subprocess
-import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -13,33 +10,23 @@ from pathlib import Path
 from typing import Any
 
 from .audit import AuditLedger
-from .learning import LearningRegistry
-from .moomoo_gateway import MoomooSimulationGateway
-from .nasdaq100_universe import load_universe_config, securities, sync_universe_config
-from .paths import APP_ROOT, BACKEND_ROOT, CONFIG_ROOT, STORAGE_ROOT, WORKSPACE_ROOT
-from .pnl_ledger import PnLLedger
-from .t_trader import SimulationTTrader
+from .integrity import ScenarioIntegrityRegistry
+from .nasdaq100_universe import load_universe_config, securities
+from .paths import CONFIG_ROOT, DEMO_ROOT, clear_local_data
+from .privacy import PrivacyPreferences
+from .runtime_policy import (
+    STORE_EDITION,
+    STORE_READ_ONLY,
+)
 
 
-MODEL_CONFIG = CONFIG_ROOT / "model_config.json"
-PRIVATE_MODEL_ROOT = STORAGE_ROOT / "models" / "nasdaq100"
-DEMO_MODEL_ROOT = APP_ROOT / "demo_data"
-
-
-def _select_model_root() -> Path:
-    configured = os.environ.get("AEGIS_MODEL_ROOT")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    if (PRIVATE_MODEL_ROOT / "latest_rankings.csv").exists():
-        return PRIVATE_MODEL_ROOT
-    return DEMO_MODEL_ROOT
-
-
-US_MODEL_ROOT = _select_model_root()
-DATA_MODE = "DEMO" if US_MODEL_ROOT == DEMO_MODEL_ROOT else "PRIVATE_MODEL_ARTIFACTS"
-SOURCE_LEDGER = US_MODEL_ROOT / "source_ledger.csv"
-PREDICTIONS = US_MODEL_ROOT / "walk_forward_predictions.csv"
-SUMMARY = US_MODEL_ROOT / "backtest_summary.json"
+MODEL_CONFIG = CONFIG_ROOT / "store_model_config.json"
+DEMO_MODEL_ROOT = DEMO_ROOT
+US_MODEL_ROOT = DEMO_MODEL_ROOT
+DATA_MODE = "DETERMINISTIC_SYNTHETIC_SCENARIO"
+SAMPLE_MANIFEST = US_MODEL_ROOT / "illustrative_sample_manifest.csv"
+SCENARIO_OUTCOMES = US_MODEL_ROOT / "illustrative_scenario_outcomes.csv"
+SCENARIO_METRICS = US_MODEL_ROOT / "scenario_metrics.json"
 RANKINGS = US_MODEL_ROOT / "latest_rankings.csv"
 
 
@@ -66,14 +53,6 @@ def _price(value: float) -> float:
     return round(max(0.01, float(value)), 3)
 
 
-def _simulation_execution_opted_in() -> bool:
-    return os.environ.get("AEGIS_ENABLE_SIMULATION_EXECUTION", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
 def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -88,31 +67,68 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
-class AegisService:
-    """Prediction-only application service.
+def derive_scenario_metrics(rows: list[dict[str, str]]) -> dict[str, Any]:
+    """Derive displayed diagnostics from every bundled illustrative row."""
 
-    The forecasting service is isolated from execution. Moomoo access is
-    exposed through a separate simulation-only gateway.
-    """
+    parsed = [
+        (
+            float(row["scenario_up_score"]),
+            int(row["illustrative_outcome_up"]),
+            _as_bool(row["selected_scenario_case"]),
+        )
+        for row in rows
+    ]
+    if not parsed:
+        raise ValueError("Bundled illustrative scenario outcomes are missing")
+    selected = [(score, outcome) for score, outcome, is_selected in parsed if is_selected]
+    buckets = []
+    gap = 0.0
+    for lower, upper in ((0.0, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)):
+        values = [(score, outcome) for score, outcome, _ in parsed if lower <= score < upper]
+        if not values:
+            continue
+        mean_score = sum(value[0] for value in values) / len(values)
+        frequency = sum(value[1] for value in values) / len(values)
+        gap += abs(mean_score - frequency) * len(values) / len(parsed)
+        buckets.append(
+            {
+                "bucket": f"{lower:.0%}-{min(upper, 1.0):.0%}",
+                "mean_scenario_up_score": round(mean_score, 6),
+                "illustrative_up_frequency": round(frequency, 6),
+                "sample_count": len(values),
+            }
+        )
+    return {
+        "dataset": DATA_MODE,
+        "derived_from": SCENARIO_OUTCOMES.name,
+        "sample_count": len(parsed),
+        "selected_scenario_count": len(selected),
+        "mean_scenario_up_score": round(sum(value[0] for value in parsed) / len(parsed), 6),
+        "overall_illustrative_up_frequency": round(sum(value[1] for value in parsed) / len(parsed), 6),
+        "selected_illustrative_up_frequency": (
+            round(sum(value[1] for value in selected) / len(selected), 6)
+            if selected
+            else None
+        ),
+        "illustrative_brier_score": round(
+            sum((score - outcome) ** 2 for score, outcome, _ in parsed) / len(parsed),
+            6,
+        ),
+        "illustrative_bucket_gap": round(gap, 6),
+        "buckets": buckets,
+        "claim_boundary": "ILLUSTRATIVE_GENERATED_SAMPLES_ONLY",
+    }
+
+
+class AegisService:
+    """Offline Store service for deterministic synthetic research examples."""
 
     def __init__(self) -> None:
         self.audit = AuditLedger()
-        self.learning = LearningRegistry(audit=self.audit)
-        self.pnl = PnLLedger()
-        self.moomoo = MoomooSimulationGateway(
-            allowed_codes={
-                item["code"] for item in self._focus_universe()
-                if item.get("tradable", True)
-            },
-            audit=self.audit,
-        )
-        self.t_trader = SimulationTTrader(
-            self.moomoo,
-            lambda: self.signals(limit=50)["items"],
-            self.audit,
-        )
-        self._refresh_lock = threading.Lock()
-        self._last_refresh: dict[str, Any] | None = None
+        self.integrity = ScenarioIntegrityRegistry(audit=self.audit)
+        self.privacy = PrivacyPreferences()
+        self._verification_lock = threading.Lock()
+        self._last_verification: dict[str, Any] | None = None
 
     def _config(self) -> dict[str, Any]:
         return _read_json(MODEL_CONFIG)
@@ -123,148 +139,132 @@ class AegisService:
     def _focus_universe(self) -> list[dict[str, Any]]:
         return securities()
 
-    def _market_data_universe(self) -> list[dict[str, Any]]:
+    def _scenario_universe(self) -> list[dict[str, Any]]:
         return [
             item
             for item in self._focus_universe()
             if item.get("data_available", True)
-            and item.get("tradable", True)
+            and item.get("research_included", True)
             and str(item.get("code", "")).startswith("US.")
         ]
 
     def _coverage(self) -> dict[str, Any]:
-        ledger = _read_csv(SOURCE_LEDGER)
-        allowed_codes = {item["code"].upper() for item in self._market_data_universe()}
+        sample_manifest = _read_csv(SAMPLE_MANIFEST)
+        outcomes = _read_csv(SCENARIO_OUTCOMES)
+        allowed_codes = {item["code"].upper() for item in self._scenario_universe()}
         covered_codes = {
             str(row.get("code") or "").upper()
-            for row in ledger
+            for row in sample_manifest
             if str(row.get("code") or "").upper() in allowed_codes
         }
         research_universe = len(self._focus_universe())
-        market_data_universe = len(allowed_codes)
+        scenario_universe = len(allowed_codes)
         covered = len(covered_codes)
-        latest_dates = sorted({str(row.get("last_date") or "") for row in ledger if row.get("last_date")})
+        scenario_labels = sorted(
+            {
+                str(row.get("scenario_as_of") or "")
+                for row in sample_manifest
+                if row.get("scenario_as_of")
+            }
+        )
         return {
             "researchUniverse": research_universe,
-            "marketDataUniverse": market_data_universe,
+            "scenarioUniverse": scenario_universe,
             "coveredSecurities": covered,
-            "coveragePct": round((covered / market_data_universe * 100.0), 3) if market_data_universe else 0.0,
-            "latestDate": latest_dates[-1] if latest_dates else None,
-            "sourceLedgerRows": covered,
-            "adjustment": (
-                "确定性合成演示数据"
-                if DATA_MODE == "DEMO"
-                else "美股拆股与分红调整"
-            ),
-            "dataTier": (
-                "Bundled synthetic demo"
-                if DATA_MODE == "DEMO"
-                else "Moomoo OpenD private artifacts"
-            ),
-            "fullMarketReady": bool(market_data_universe and covered >= market_data_universe),
-            "privateObservationOnly": research_universe - market_data_universe,
+            "coveragePct": round((covered / scenario_universe * 100.0), 3) if scenario_universe else 0.0,
+            "scenarioLabel": scenario_labels[-1] if scenario_labels else None,
+            "sampleManifestRows": len(sample_manifest),
+            "illustrativeOutcomeRows": len(outcomes),
+            "generationMethod": "stable-sha256-v1",
+            "dataTier": "Bundled deterministic synthetic scenario",
+            "fullScenarioReady": bool(scenario_universe and covered >= scenario_universe),
         }
 
     def signals(self, limit: int = 200) -> dict[str, Any]:
-        allowed = {item["code"].upper() for item in self._market_data_universe()}
+        allowed = {item["code"].upper() for item in self._scenario_universe()}
         rows = [
             row for row in _read_csv(RANKINGS)
             if str(row.get("code") or "").upper() in allowed
         ]
         rows.sort(
             key=lambda row: (
-                _as_bool(row.get("selected_signal")),
+                _as_bool(row.get("selected_scenario_case")),
                 _as_float(row.get("ranking_value"), 0.0) or 0.0,
             ),
             reverse=True,
         )
         gates = self._config().get("gates", {})
-        minimum_p_up = float(gates.get("minimum_p_up", 0.60))
-        minimum_p_action = float(gates.get("minimum_p_action", 0.45))
+        minimum_up_score = float(gates.get("minimum_scenario_up_score", 0.54))
+        minimum_pattern_score = float(gates.get("minimum_scenario_pattern_score", 0.30))
         output = []
         for index, row in enumerate(rows[: max(1, min(int(limit), 500))], start=1):
-            market_allowed = _as_bool(row.get("market_trade_allowed"))
-            selected = _as_bool(row.get("selected_signal"))
-            p_up = _as_float(row.get("p_up"), None)
-            p_action = _as_float(row.get("p_action"), None)
+            scenario_context_available = _as_bool(row.get("scenario_context_available"))
+            selected = _as_bool(row.get("selected_scenario_case"))
+            up_score = _as_float(row.get("scenario_up_score"), None)
+            pattern_score = _as_float(row.get("scenario_pattern_score"), None)
             reasons: list[str] = []
-            if not market_allowed:
-                reasons.append("市场状态门关闭")
-            if not _as_bool(row.get("base_candidate")):
-                reasons.append("趋势、动量或量价确认不足")
-            if p_up is None or p_up < minimum_p_up:
-                reasons.append(f"5日上涨校准概率未达到{minimum_p_up:.0%}")
-            if p_action is None or p_action < minimum_p_action:
-                reasons.append(f"可行动概率未达到{minimum_p_action:.0%}")
+            if not scenario_context_available:
+                reasons.append("说明性情景字段不完整")
+            if not _as_bool(row.get("rule_eligible")):
+                reasons.append("稳定哈希情景规则分数不足")
+            if up_score is None or up_score < minimum_up_score:
+                reasons.append(f"说明性上行分数未达到{minimum_up_score:.0%}")
+            if pattern_score is None or pattern_score < minimum_pattern_score:
+                reasons.append(f"说明性形态分数未达到{minimum_pattern_score:.0%}")
             if not reasons and not selected:
-                reasons.append("滚动样本外阈值未通过")
-            close = _as_float(row.get("close"), 0.0) or 0.0
-            atr = _as_float(row.get("atr14"), 0.0) or 0.0
-            trigger = _as_float(row.get("trigger_level"), close) or close
-            support = _as_float(row.get("support_level"), close - atr) or (close - atr)
-            invalid = _as_float(row.get("invalid_level"), close - 2 * atr) or (close - 2 * atr)
-            atr = max(atr, close * 0.005)
-            pullback_low = max(invalid + 0.25 * atr, support)
-            pullback_high = max(pullback_low, min(close, support + 0.60 * atr))
-            t_buy = max(invalid + 0.50 * atr, close - 0.45 * atr)
-            t_sell = close + 0.45 * atr
-            t_stop = max(invalid, close - 1.25 * atr)
-            entry_state = (
-                "BUY_TRIGGERED" if selected and close >= trigger
-                else "WAIT_BREAKOUT" if selected
+                reasons.append("说明性选择规则未通过")
+            reference = _as_float(row.get("illustrative_reference_value"), 0.0) or 0.0
+            variation = _as_float(row.get("illustrative_variation_unit"), 0.0) or 0.0
+            trigger = _as_float(row.get("confirmation_reference"), reference) or reference
+            support = _as_float(row.get("structural_reference"), reference - variation) or (reference - variation)
+            invalid = _as_float(row.get("invalidation_reference"), reference - 2 * variation) or (reference - 2 * variation)
+            variation = max(variation, reference * 0.005)
+            reference_low = max(invalid + 0.25 * variation, support)
+            reference_high = max(reference_low, min(reference, support + 0.60 * variation))
+            observation_state = (
+                "ABOVE_CONFIRMATION" if selected and reference >= trigger
+                else "WAIT_CONFIRMATION" if selected
                 else "OBSERVE_ONLY"
             )
             output.append(
                 {
                     "rank": index,
-                    "date": row.get("date"),
+                    "date": row.get("scenario_as_of"),
                     "code": str(row.get("code") or "").upper(),
                     "name": row.get("name") or "",
                     "strategy": row.get("archetype") or "趋势评分",
                     "technicalScore": round(_as_float(row.get("technical_score"), 0.0) or 0.0, 1),
-                    "probabilityUp": round(p_up, 4) if p_up is not None else None,
-                    "probabilityAction": round(p_action, 4) if p_action is not None else None,
-                    "sampleCount": _as_int(row.get("calibration_neighbors")),
-                    "close": _price(close),
-                    "atrPct": round((_as_float(row.get("atr_pct"), 0.0) or 0.0) * 100.0, 2),
-                    "amount20": round(_as_float(row.get("amount_ma20"), 0.0) or 0.0, 2),
-                    "marketState": row.get("market_state") or "UNKNOWN",
+                    "scenarioUpScore": round(up_score, 4) if up_score is not None else None,
+                    "scenarioPatternScore": round(pattern_score, 4) if pattern_score is not None else None,
+                    "illustrativeOutcomeRows": _as_int(row.get("illustrative_outcome_rows")),
+                    "referenceValue": _price(reference),
+                    "variationPct": round((_as_float(row.get("illustrative_variation_ratio"), 0.0) or 0.0) * 100.0, 2),
+                    "activityIndex": round(_as_float(row.get("illustrative_activity_index"), 0.0) or 0.0, 2),
+                    "scenarioState": row.get("scenario_state") or "UNKNOWN",
                     "selected": selected,
-                    "status": "进攻候选" if selected else "弃权",
+                    "status": "研究样本" if selected else "证据不足",
                     "rejectionReasons": reasons,
-                    "triggerPrice": _price(trigger),
-                    "supportPrice": _price(support),
-                    "invalidPrice": _price(invalid),
-                    "buyPlan": {
-                        "state": entry_state,
-                        "breakoutEntry": _price(trigger),
-                        "pullbackZoneLow": _price(pullback_low),
-                        "pullbackZoneHigh": _price(pullback_high),
-                        "condition": "放量突破确认价，或回踩区止跌后再入场",
-                        "marketGate": "仅 RISK_ON / NEUTRAL 允许新增多头",
+                    "confirmationLevel": _price(trigger),
+                    "structuralReferenceLevel": _price(support),
+                    "invalidationLevel": _price(invalid),
+                    "observationScenario": {
+                        "state": observation_state,
+                        "confirmationLevel": _price(trigger),
+                        "referenceZoneLow": _price(reference_low),
+                        "referenceZoneHigh": _price(reference_high),
+                        "description": "仅用于展示稳定哈希情景是否达到说明性规则阈值",
+                        "marketContext": "ILLUSTRATIVE_NEUTRAL 只是生成标签",
                     },
-                    "sellPlan": {
-                        "hardStop": _price(invalid),
-                        "takeProfit1": _price(trigger + 1.0 * atr),
-                        "takeProfit2": _price(trigger + 2.0 * atr),
-                        "trailingStopAtr": 1.5,
-                        "timeStopTradingDays": 5,
-                        "rules": [
-                            "跌破失效位立即止损",
-                            "到达第一目标减仓1/2，剩余仓位用1.5 ATR移动止损",
-                            "5个交易日未达预期则时间退出",
+                    "invalidationScenario": {
+                        "invalidationLevel": _price(invalid),
+                        "sensitivityLevel1": _price(trigger + 1.0 * variation),
+                        "sensitivityLevel2": _price(trigger + 2.0 * variation),
+                        "variationSensitivity": 1.5,
+                        "notes": [
+                            "低于失效参考值时，该说明性生成情景不再成立",
+                            "敏感度层1与2只是生成值尺度变化示例",
+                            "这些数值没有时间序列、训练或市场含义",
                         ],
-                    },
-                    "tStrategy": {
-                        "enabled": selected,
-                        "referencePrice": _price(close),
-                        "buyAtOrBelow": _price(t_buy),
-                        "sellAtOrAbove": _price(t_sell),
-                        "hardStop": _price(t_stop),
-                        "atr": _price(atr),
-                        "maxRoundsPerDay": 2,
-                        "positionFractionPerRound": 0.20,
-                        "rule": "每轮使用基础仓位的20%；先买后卖，不裸卖空，收盘前平掉训练仓",
                     },
                     "factors": {
                         "趋势": round(_as_float(row.get("factor_trend"), 0.0) or 0.0, 1),
@@ -277,26 +277,29 @@ class AegisService:
                 }
             )
         as_of = output[0]["date"] if output else None
-        market_state = output[0]["marketState"] if output else "NOT_READY"
+        scenario_state = output[0]["scenarioState"] if output else "NOT_READY"
         return {
             "asOf": as_of,
-            "marketState": market_state,
+            "scenarioState": scenario_state,
             "selectedCount": sum(1 for row in output if row["selected"]),
             "items": output,
-            "predictionHorizon": 5,
-            "scope": "Nasdaq-100当前成分证券；进攻型纯技术面模型排名",
-            "strategyProfile": self._config().get("strategy_profile", "AGGRESSIVE_SIMULATION"),
+            "scope": "Nasdaq-100 2026-08-26 成分证券快照；确定性合成说明性排名",
+            "strategyProfile": self._config().get("strategy_profile", "TECHNICAL_RESEARCH_SNAPSHOT"),
             "dataMode": DATA_MODE,
-            "demoData": DATA_MODE == "DEMO",
+            "demoData": True,
         }
 
     def universe(self, query: str = "", limit: int = 200) -> dict[str, Any]:
         included = [
             {
-                **row,
+                "ticker": row.get("ticker"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "name_en": row.get("name_en"),
+                "official_name": row.get("official_name"),
+                "group": row.get("group"),
                 "included_research": bool(row.get("data_available", True)),
-                "market": "US" if str(row.get("code", "")).startswith("US.") else "PRIVATE",
-                "trade_environment": "SIMULATE" if row.get("tradable", True) else "OBSERVE_ONLY",
+                "market": "US",
             }
             for row in self._focus_universe()
         ]
@@ -313,248 +316,117 @@ class AegisService:
                 "market": "US",
                 "index": self._universe_config().get("index", "NASDAQ-100"),
                 "researchUniverse": len(self._focus_universe()),
-                "activeUniverse": len(self._market_data_universe()),
-                "privateObservationOnly": len(self._focus_universe()) - len(self._market_data_universe()),
+                "scenarioUniverse": len(self._scenario_universe()),
                 "benchmark": self._universe_config().get("benchmark"),
-                "execution": "MOOMOO_SIMULATE_ONLY",
+                "productMode": "WINDOWS_STORE_READ_ONLY",
                 "constituentAsOf": self._universe_config().get("constituent_as_of"),
+                "snapshotDate": self._universe_config().get("snapshot_date"),
                 "officialSource": self._universe_config().get("official_source"),
                 "constituentCompanies": self._universe_config().get("constituent_company_count", 100),
                 "constituentSecurities": len(self._focus_universe()),
                 "rankingMethod": self._universe_config().get(
-                    "ranking_method", "AEGIS_CURRENT_TECHNICAL_MODEL"
+                    "ranking_method", "AEGIS_TECHNICAL_RESEARCH_SNAPSHOT"
                 ),
             },
             "items": included[: max(1, min(int(limit), 500))],
         }
 
-    def sync_universe(self) -> dict[str, Any]:
-        trace_id = str(uuid.uuid4())
-        config = sync_universe_config()
-        self._reload_gateway_universe()
-        broker = self.moomoo.status(force_refresh=True)
-        result = {
-            "ok": True,
-            "index": config["index"],
-            "constituentSecurities": config["constituent_security_count"],
-            "constituentAsOf": config["constituent_as_of"],
-            "broker": broker,
-            "traceId": trace_id,
-        }
-        self.audit.append("DATA", "NASDAQ100_UNIVERSE_SYNCED", result, trace_id)
-        return result
-
-    def _reload_gateway_universe(self) -> None:
-        self.moomoo.set_allowed_codes(
-            {
-                item["code"]
-                for item in self._focus_universe()
-                if item.get("tradable", True)
-            }
-        )
-
-    def moomoo_account(self) -> dict[str, Any]:
-        try:
-            account = self.moomoo.account_snapshot()
-        except Exception as exc:
-            broker = self.moomoo.status(force_refresh=True)
-            account = {
-                "connected": False,
-                "broker": "Moomoo",
-                "environment": "SIMULATE",
-                "account": {"masked": "—", "type": "SIMULATE", "status": broker["state"]},
-                "funds": {
-                    "currency": "USD",
-                    "totalAssets": 0.0,
-                    "cash": 0.0,
-                    "buyingPower": 0.0,
-                    "marketValue": 0.0,
-                    "frozenCash": 0.0,
-                    "availableFunds": 0.0,
-                    "unrealizedPnl": 0.0,
-                    "realizedPnl": 0.0,
-                    "todayPnl": 0.0,
-                },
-                "positions": [],
-                "orders": [],
-                "statistics": {
-                    "submittedOrders": 0,
-                    "filledOrders": 0,
-                    "cancelledOrRejectedOrders": 0,
-                    "activeOrders": 0,
-                    "buyFilledOrders": 0,
-                    "sellFilledOrders": 0,
-                    "filledQuantity": 0.0,
-                    "turnover": 0.0,
-                },
-                "asOf": datetime.now(timezone.utc).isoformat(),
-                "message": broker.get("message") or str(exc),
-                "liveTradingAllowed": False,
-            }
-        if account.get("connected"):
-            self.pnl.record(account)
-        account["tTrading"] = self.t_trader.status(account)
-        return account
-
-    def pnl_history(self) -> dict[str, Any]:
-        return self.pnl.history()
-
-    def update_t_trading(self, payload: dict[str, Any]) -> dict[str, Any]:
-        policy = self.t_trader.update_policy(payload)
-        account = self.moomoo.account_snapshot()
-        return {"ok": True, "policy": policy, "tTrading": self.t_trader.status(account)}
-
-    def run_t_trading_tick(self) -> dict[str, Any]:
-        result = self.t_trader.tick()
-        try:
-            self.pnl.record(self.moomoo.account_snapshot())
-        except Exception:
-            pass
-        return result
-
     def status(self) -> dict[str, Any]:
         signals = self.signals(limit=200)
         universe_meta = self.universe(limit=20)["meta"]
         coverage = self._coverage()
-        metrics = _read_json(SUMMARY)
-        evaluated = _as_int(metrics.get("evaluated_signal_count"))
-        precision = _as_float(metrics.get("precision_up"), 0.0) or 0.0
-        precision_lcb = _as_float(metrics.get("precision_lcb_95"), 0.0) or 0.0
-        baseline = _as_float(metrics.get("baseline_up_rate"), 0.0) or 0.0
-        average_return = _as_float(metrics.get("average_net_return"), 0.0) or 0.0
-        claim_allowed = bool(
-            evaluated >= 200
-            and average_return > 0
-            and precision > baseline
-            and precision_lcb > baseline
-        )
-        conclusion = "优势通过保守检验" if claim_allowed else "尚未证明稳定优势"
+        metrics = derive_scenario_metrics(_read_csv(SCENARIO_OUTCOMES))
+        claim_allowed = False
+        conclusion = "说明性生成样本；没有真实性能结论"
         return {
             "system": {
                 "name": "Aegis Forecast",
-                "version": "1.4.0",
-                "mode": "NASDAQ100_SIMULATION",
+                "version": "1.5.0",
+                "mode": DATA_MODE,
+                "edition": STORE_EDITION,
+                "storeReadOnly": STORE_READ_ONLY,
                 "dataMode": DATA_MODE,
-                "demoData": DATA_MODE == "DEMO",
-                "accountConnected": self.moomoo.status()["connected"],
-                "canPlaceOrders": False,
-                "canPlaceSimulationOrders": (
-                    self.moomoo.status()["connected"]
-                    and _simulation_execution_opted_in()
-                ),
-                "simulationExecutionEnabled": _simulation_execution_opted_in(),
-                "liveTradingAllowed": False,
+                "demoData": True,
+                "offlineOnly": True,
                 "serverTime": datetime.now(timezone.utc).isoformat(),
             },
-            "market": {
-                "state": signals["marketState"],
+            "scenario": {
+                "state": signals["scenarioState"],
                 "asOf": signals["asOf"],
-                "highConfidenceSignals": signals["selectedCount"],
+                "selectedScenarioCount": signals["selectedCount"],
                 "researchUniverse": _as_int(universe_meta.get("researchUniverse")),
-                "activeUniverse": _as_int(universe_meta.get("activeUniverse")),
+                "scenarioUniverse": _as_int(universe_meta.get("scenarioUniverse")),
                 "benchmark": universe_meta.get("benchmark"),
-                "execution": universe_meta.get("execution"),
+                "productMode": universe_meta.get("productMode"),
             },
             "coverage": coverage,
-            "model": {
+            "claimBoundary": {
                 "conclusion": conclusion,
-                "evaluatedSignals": evaluated,
-                "minimumEvidenceSignals": 200,
-                "observedPrecision": round(precision, 4),
-                "precisionLowerBound95": round(precision_lcb, 4),
-                "baselineUpRate": round(baseline, 4),
+                "illustrativeSamples": metrics["sample_count"],
+                "selectedScenarioSamples": metrics["selected_scenario_count"],
+                "selectedIllustrativeUpFrequency": metrics["selected_illustrative_up_frequency"],
                 "claimAllowed": claim_allowed,
             },
-            "refresh": self._last_refresh,
+            "scenarioVerification": self._last_verification,
         }
 
     def data_status(self) -> dict[str, Any]:
         universe_meta = self.universe(limit=20)["meta"]
         coverage = self._coverage()
-        ledger = _read_csv(SOURCE_LEDGER)
-        broker = self.moomoo.status()
-        market_data_name = (
-            "确定性合成演示数据"
-            if DATA_MODE == "DEMO"
-            else "Moomoo OpenD"
-        )
+        sample_manifest = _read_csv(SAMPLE_MANIFEST)
         warnings: list[str] = []
-        if not coverage["fullMarketReady"]:
-            missing = coverage["marketDataUniverse"] - coverage["coveredSecurities"]
-            warnings.append(
-                f"有{missing}个Nasdaq-100成分证券尚未达到180条日线要求；暂不参与排名"
-            )
-        if not broker["connected"]:
-            warnings.append(broker["message"])
+        if not coverage["fullScenarioReady"]:
+            missing = coverage["scenarioUniverse"] - coverage["coveredSecurities"]
+            warnings.append(f"有{missing}个成分证券缺少说明性生成行")
+        warnings.append("全部数值由稳定哈希生成；没有历史行情、训练数据或真实性能证据")
         return {
             "coverage": coverage,
             "universe": universe_meta,
             "sources": [
                 {
                     "name": "Nasdaq官方成分股",
-                    "role": "Nasdaq-100当前100家公司、全部成分证券",
+                    "role": "Nasdaq-100 2026-08-26 快照：100家公司、102只成分证券",
                     "status": "AVAILABLE",
                     "updatedAt": self._universe_config().get("constituent_as_of"),
                 },
                 {
-                    "name": market_data_name,
-                    "role": (
-                        "用于公开复现的合成排名与校准样本"
-                        if DATA_MODE == "DEMO"
-                        else "美股行情与模拟交易账户"
-                    ),
-                    "status": (
-                        "DEMO"
-                        if DATA_MODE == "DEMO"
-                        else ("AVAILABLE" if broker["connected"] else "NOT_CONNECTED")
-                    ),
-                    "updatedAt": coverage.get("latestDate"),
+                    "name": "确定性合成说明性情景",
+                    "role": "稳定 SHA-256 生成的排名值与说明性结果行",
+                    "status": "SYNTHETIC_DEMO",
+                    "updatedAt": coverage.get("scenarioLabel"),
                 },
                 {
-                    "name": "历史日线缓存",
-                    "role": "调整后OHLCV与成交额",
-                    "status": "AVAILABLE" if coverage["fullMarketReady"] else ("PARTIAL" if ledger else "NOT_READY"),
-                    "updatedAt": coverage.get("latestDate"),
+                    "name": "说明性样本清单",
+                    "role": "每只证券一行生成说明以及300行说明性结果",
+                    "status": "AVAILABLE" if coverage["fullScenarioReady"] else ("PARTIAL" if sample_manifest else "NOT_READY"),
+                    "updatedAt": coverage.get("scenarioLabel"),
                 },
             ],
             "warnings": warnings,
-            "purchaseRecommendation": (
-                "当前为合成演示数据；不得用于投资决策"
-                if DATA_MODE == "DEMO"
-                else "指数清单来自Nasdaq官方；日线与模拟交易来自Moomoo OpenD"
-            ),
-            "broker": broker,
+            "purchaseRecommendation": "稳定哈希说明性样本；非市场观测、非训练结果、不得用于投资决策",
             "dataMode": DATA_MODE,
         }
 
     def performance(self) -> dict[str, Any]:
-        metrics = _read_json(SUMMARY)
-        rows = _read_csv(PREDICTIONS)
-        calibration_rows: list[dict[str, Any]] = []
-        buckets = [(0.0, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)]
-        for lower, upper in buckets:
-            eligible = []
-            for row in rows:
-                probability = _as_float(row.get("p_up"), None)
-                label = _as_float(row.get("label_up"), None)
-                if probability is not None and label is not None and lower <= probability < upper:
-                    eligible.append((probability, label))
-            if eligible:
-                calibration_rows.append(
-                    {
-                        "bucket": f"{lower:.0%}–{min(upper, 1.0):.0%}",
-                        "predicted": round(sum(item[0] for item in eligible) / len(eligible), 4),
-                        "actual": round(sum(item[1] for item in eligible) / len(eligible), 4),
-                        "samples": len(eligible),
-                    }
-                )
-        evaluated = _as_int(metrics.get("evaluated_signal_count"))
+        metrics = derive_scenario_metrics(_read_csv(SCENARIO_OUTCOMES))
+        shipped_metrics = _read_json(SCENARIO_METRICS)
+        if metrics != shipped_metrics:
+            raise ValueError("Bundled scenario metrics do not match the shipped illustrative rows")
+        bucket_rows = [
+            {
+                "bucket": row["bucket"].replace("-", "–"),
+                "scenarioScore": row["mean_scenario_up_score"],
+                "illustrativeFrequency": row["illustrative_up_frequency"],
+                "samples": row["sample_count"],
+            }
+            for row in metrics["buckets"]
+        ]
         return {
             "metrics": metrics,
-            "calibration": calibration_rows,
-            "posture": "EVIDENCE_INSUFFICIENT" if evaluated < 30 else "MONITORING",
-            "message": "高置信样本不足，当前结果不可外推" if evaluated < 30 else "继续进行滚动样本外验证",
-            "method": "504交易日滚动训练 · 5日标签隔离 · 次日开盘近似进入 · 已计20bp摩擦",
+            "scenarioBuckets": bucket_rows,
+            "posture": "ILLUSTRATIVE_ONLY",
+            "message": "结果频率来自随包稳定哈希生成行，只用于验证界面与计算一致性",
+            "method": "300行说明性生成样本 · 无历史行情 · 无训练 · 无样本外性能声明",
         }
 
     def factor_status(self) -> dict[str, Any]:
@@ -569,12 +441,12 @@ class AegisService:
                     "average": round(sum(values) / len(values), 1) if values else None,
                     "weight": self._factor_weight(name),
                     "description": {
-                        "趋势": "均线排列、斜率、ADX与方向性",
-                        "动量": "多周期收益、RSI与MACD动能",
-                        "相对强弱": "相对纳斯达克100基准的多周期超额",
-                        "量价": "量比、OBV、MFI与收盘位置",
-                        "结构": "突破、区间位置与波动压缩",
-                        "风险质量": "ATR、回撤与成交额可交易性",
+                        "趋势": "稳定哈希生成的说明性趋势维度",
+                        "动量": "稳定哈希生成的说明性动量维度",
+                        "相对强弱": "稳定哈希生成的说明性相对维度",
+                        "量价": "稳定哈希生成的说明性活动维度",
+                        "结构": "稳定哈希生成的说明性结构维度",
+                        "风险质量": "稳定哈希生成的说明性变化维度",
                     }[name],
                 }
             )
@@ -592,63 +464,58 @@ class AegisService:
         value = self._config().get("factor_weights", {}).get(mapping[name], 0.0)
         return round(float(value), 4)
 
-    def refresh_predictions(self) -> dict[str, Any]:
-        if not self._refresh_lock.acquire(blocking=False):
-            return {"ok": False, "busy": True, "message": "预测刷新正在进行"}
+    def verify_scenario(self) -> dict[str, Any]:
+        if not self._verification_lock.acquire(blocking=False):
+            return {"ok": False, "busy": True, "message": "合成演示校验正在进行"}
         trace_id = str(uuid.uuid4())
         started = datetime.now(timezone.utc).isoformat()
-        self.audit.append("MODEL", "PREDICTION_REFRESH_STARTED", {}, trace_id)
+        self.audit.append("SCENARIO", "ILLUSTRATIVE_SCENARIO_CHECK_STARTED", {}, trace_id)
         try:
-            broker = self.moomoo.status()
-            if not broker["connected"]:
-                self._last_refresh = {
-                    "ok": False,
-                    "startedAt": started,
-                    "completedAt": datetime.now(timezone.utc).isoformat(),
-                    "message": broker["message"],
-                    "traceId": trace_id,
-                }
-                self.audit.append("MODEL", "PREDICTION_REFRESH_DEFERRED", self._last_refresh, trace_id)
-                return self._last_refresh
-            local_runtime = APP_ROOT / ".venv" / "bin" / "python"
-            python = str(local_runtime if local_runtime.exists() else Path(sys.executable))
-            environment = os.environ.copy()
-            environment["PYTHONPATH"] = os.pathsep.join(
-                [str(BACKEND_ROOT), str(WORKSPACE_ROOT), environment.get("PYTHONPATH", "")]
-            )
-            completed = subprocess.run(
-                [python, "-m", "aegis_quant.us_pipeline"],
-                cwd=APP_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=900,
-                check=True,
-                env=environment,
-            )
-            result = json.loads(completed.stdout.strip().splitlines()[-1])
-            self._reload_gateway_universe()
-            self._last_refresh = {
+            metrics = derive_scenario_metrics(_read_csv(SCENARIO_OUTCOMES))
+            if metrics != _read_json(SCENARIO_METRICS):
+                raise ValueError("说明性生成行与随包指标不一致")
+            self._last_verification = {
                 "ok": True,
                 "startedAt": started,
                 "completedAt": datetime.now(timezone.utc).isoformat(),
-                "message": f"预测已刷新：{result['asOf']}，覆盖{result['rankingRows']}只公开股票",
-                "result": result,
+                "message": "已逐行重算内置说明性生成样本并确认一致；没有行情、训练或账户连接",
+                "snapshotDate": "2026-08-26",
+                "sampleCount": metrics["sample_count"],
                 "traceId": trace_id,
             }
-            self.audit.append("MODEL", "PREDICTION_REFRESH_COMPLETED", self._last_refresh, trace_id)
-            return self._last_refresh
+            self.audit.append("SCENARIO", "ILLUSTRATIVE_SCENARIO_CHECK_COMPLETED", self._last_verification, trace_id)
+            return self._last_verification
         except Exception as exc:
-            self._last_refresh = {
+            self._last_verification = {
                 "ok": False,
                 "startedAt": started,
                 "completedAt": datetime.now(timezone.utc).isoformat(),
                 "message": str(exc),
                 "traceId": trace_id,
             }
-            self.audit.append("MODEL", "PREDICTION_REFRESH_FAILED", self._last_refresh, trace_id)
-            return self._last_refresh
+            self.audit.append("SCENARIO", "ILLUSTRATIVE_SCENARIO_CHECK_FAILED", self._last_verification, trace_id)
+            return self._last_verification
         finally:
-            self._refresh_lock.release()
+            self._verification_lock.release()
 
     def audit_events(self) -> dict[str, Any]:
         return {"verification": self.audit.verify(), "items": self.audit.recent(200)}
+
+    def privacy_status(self) -> dict[str, Any]:
+        return self.privacy.status()
+
+    def update_privacy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "privacy": self.privacy.update(payload)}
+
+    def delete_local_data(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("confirm") != "DELETE_LOCAL_DATA":
+            raise ValueError("Local data deletion requires explicit confirmation")
+        result = clear_local_data()
+        self.privacy = PrivacyPreferences()
+        self.audit = AuditLedger()
+        self.integrity = ScenarioIntegrityRegistry(audit=self.audit)
+        return {
+            **result,
+            "message": "Quant Scenario Studio 本地运行数据已删除；合成演示数据和应用文件未受影响",
+            "privacy": self.privacy.status(),
+        }

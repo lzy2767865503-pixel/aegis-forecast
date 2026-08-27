@@ -4,7 +4,7 @@ import argparse
 import json
 
 from .audit import AuditLedger
-from .learning import LearningRegistry
+from .integrity import ScenarioIntegrityRegistry
 from .nasdaq100_universe import load_universe_config, sync_universe_config
 from .paths import ensure_directories
 from .server import serve
@@ -20,12 +20,12 @@ def main() -> None:
     run.add_argument("--port", type=int, default=8766)
     run.add_argument("--open", action="store_true")
     subparsers.add_parser("verify-audit")
-    subparsers.add_parser("learning-cycle")
+    subparsers.add_parser("integrity-check")
     args = parser.parse_args()
 
     ensure_directories()
     AuditLedger()
-    registry = LearningRegistry()
+    registry = ScenarioIntegrityRegistry()
 
     if args.command == "bootstrap":
         current = load_universe_config()
@@ -36,7 +36,7 @@ def main() -> None:
         serve(args.host, args.port, args.open)
     elif args.command == "verify-audit":
         print(json.dumps(AuditLedger().verify(), ensure_ascii=False, indent=2))
-    elif args.command == "learning-cycle":
+    elif args.command == "integrity-check":
         print(json.dumps(registry.run_cycle(), ensure_ascii=False, indent=2))
 
 

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- Production identity reserved in Partner Center for Store ID
+       9NWTH4KJX5GW. Identity Name and technical Publisher are hard-locked;
+       neither field is a visible author credit. -->
+  <Identity Name="LAIZEYU.QuantScenarioStudiobyLAIZEYU" Publisher="CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8" Version="1.5.0.0" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Quant Scenario Studio by LAI ZEYU</DisplayName>
+    <!-- This is an identity field, not the bilingual author credit. It must
+         match the verified Partner Center Publisher display name exactly. -->
+    <PublisherDisplayName>LAI ZEYU</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Resources>
+    <Resource Language="zh-cn" />
+  </Resources>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Applications>
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="Quant Scenario Studio by LAI ZEYU"
+        Description="只读 Nasdaq-100 研究、教育与合成模拟工作站；源自 Aegis Forecast 研究引擎"
+        BackgroundColor="#07131F"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#07131F" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

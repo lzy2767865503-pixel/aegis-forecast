@@ -16,6 +16,6 @@ if [[ ! -x .venv/bin/python || ! -f frontend/dist/index.html ]]; then
 fi
 
 export PYTHONPATH="$project_root/backend:$project_root"
-export AEGIS_ENABLE_SIMULATION_EXECUTION="${AEGIS_ENABLE_SIMULATION_EXECUTION:-0}"
+export AEGIS_ENABLE_SIMULATION_EXECUTION=0
 
-exec ./.venv/bin/python -m aegis_quant.cli serve --host 127.0.0.1 --port "${AEGIS_PORT:-8766}"
+exec ./.venv/bin/python -m aegis_quant.cli serve --host 127.0.0.1 --port "${AEGIS_PORT:-8766}" --open

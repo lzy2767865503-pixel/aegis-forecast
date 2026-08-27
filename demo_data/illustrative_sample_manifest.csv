@@ -1,0 +1,103 @@
+code,name,scenario_as_of,ranking_rows,illustrative_outcome_rows,source_kind,generator
+US.WMT,Walmart Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.BKNG,Booking Holdings Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MU,"Micron Technology, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.COST,Costco Wholesale Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CSX,CSX Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.GOOG,Alphabet Inc. Class C Capital Stock,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.RKLB,Rocket Lab Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MNST,Monster Beverage Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PCAR,PACCAR Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ORLY,"O'Reilly Automotive, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PEP,"PepsiCo, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AMZN,"Amazon.com, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.KLAC,KLA Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AMAT,"Applied Materials, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ALAB,"Astera Labs, Inc.",2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TMUS,"T-Mobile US, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ABNB,"Airbnb, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.LRCX,Lam Research Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.DDOG,"Datadog, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.QCOM,QUALCOMM Incorporated,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ADI,"Analog Devices, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.HONA,Honeywell Aerospace Inc.,2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AAPL,Apple Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PANW,"Palo Alto Networks, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.FER,Ferrovial N.V.,2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.INTU,Intuit Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ROST,"Ross Stores, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CPRT,"Copart, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CEG,Constellation Energy Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MRVL,"Marvell Technology, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AXON,"Axon Enterprise, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AMGN,Amgen Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ADSK,"Autodesk, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.HON,Honeywell International Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.EXC,Exelon Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.FAST,Fastenal Company,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.NVDA,NVIDIA Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CTAS,Cintas Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TXN,Texas Instruments Incorporated,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.GEHC,GE HealthCare Technologies Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ADP,"Automatic Data Processing, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.GILD,"Gilead Sciences, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.SBUX,Starbucks Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.META,"Meta Platforms, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ISRG,"Intuitive Surgical, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.NBIS,Nebius Group N.V. Class A,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CMCSA,Comcast Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MDLZ,"Mondelez International, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.KHC,The Kraft Heinz Company,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.IDXX,"IDEXX Laboratories, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.GOOGL,Alphabet Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PLTR,Palantir Technologies Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.INTC,Intel Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TER,"Teradyne, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AMD,"Advanced Micro Devices, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.DXCM,"DexCom, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.APP,Applovin Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PYPL,"PayPal Holdings, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TTWO,"Take-Two Interactive Software, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.FTNT,"Fortinet, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MPWR,"Monolithic Power Systems, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.STX,Seagate Technology Holdings PLC,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.SNPS,"Synopsys, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PDD,PDD Holdings Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.SHOP,Shopify Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ARM,Arm Holdings plc,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.WBD,"Warner Bros. Discovery, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MSFT,Microsoft Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CRWV,"CoreWeave, Inc.",2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.NFLX,"Netflix, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.WDAY,"Workday, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.DASH,"DoorDash, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.KDP,Keurig Dr Pepper Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.PAYX,"Paychex, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ASML,ASML Holding N.V.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.FANG,"Diamondback Energy, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TSLA,"Tesla, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.REGN,"Regeneron Pharmaceuticals, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.SPCX,Space Exploration Technologies Corp.,2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.BKR,Baker Hughes Company,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MCHP,Microchip Technology Incorporated,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.SNDK,Sandisk Corporation,2026-08-26,1,2,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.LITE,Lumentum Holdings Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CCEP,Coca-Cola Europacific Partners plc,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ADBE,Adobe Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.LIN,Linde plc,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CRWD,"CrowdStrike Holdings, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.VRTX,Vertex Pharmaceuticals Incorporated,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.XEL,Xcel Energy Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CDNS,"Cadence Design Systems, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.TRI,Thomson Reuters Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.WDC,Western Digital Corporation,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AVGO,Broadcom Inc.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ODFL,"Old Dominion Freight Line, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MELI,"MercadoLibre, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MSTR,Strategy Inc,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.CSCO,"Cisco Systems, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.NXPI,NXP Semiconductors N.V.,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ROP,"Roper Technologies, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.AEP,"American Electric Power Company, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.MAR,Marriott International,2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py
+US.ALNY,"Alnylam Pharmaceuticals, Inc.",2026-08-26,1,3,STABLE_HASH_GENERATED,scripts/generate_demo_data.py

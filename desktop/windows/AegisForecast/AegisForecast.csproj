@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>AegisForecast</RootNamespace>
+    <AssemblyName>QuantScenarioStudio</AssemblyName>
+    <Product>Quant Scenario Studio by LAI ZEYU</Product>
+    <Authors>LAI ZEYU（来泽宇）</Authors>
+    <Company>LAI ZEYU</Company>
+    <Copyright>Copyright © 2026 LAI ZEYU（来泽宇）</Copyright>
+    <AssemblyTitle>Quant Scenario Studio by LAI ZEYU</AssemblyTitle>
+    <FileVersion>1.5.0.0</FileVersion>
+    <Version>1.5.0</Version>
+    <Description>Read-only research, education and simulation workstation powered by Aegis Forecast.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>MSIX</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxBundle>Never</AppxBundle>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AegisPackageManifestPath)' != '' and '$(AegisPortableBuild)' != 'true'">
+    <AppxManifest Include="$(AegisPackageManifestPath)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\..\..\artifacts\backend\AegisBackend\AegisBackend.exe')">
+    <Content Include="..\..\..\artifacts\backend\AegisBackend\**\*">
+      <Link>Backend\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\..\LICENSE">
+      <Link>Legal\LICENSE.txt</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\..\THIRD_PARTY_NOTICES.md">
+      <Link>Legal\THIRD_PARTY_NOTICES.md</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\..\packaging\windows\licenses\**\*">
+      <Link>Legal\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="RequirePackagedBackend" BeforeTargets="Build">
+    <Error Condition="!Exists('..\..\..\artifacts\backend\AegisBackend\AegisBackend.exe')" Text="Build the PyInstaller onedir sidecar first with scripts/windows/build-backend.ps1." />
+    <Error Condition="'$(AegisPortableBuild)' != 'true' and '$(AegisPackageManifestPath)' == ''" Text="A generated Partner Center manifest is mandatory. Use scripts/windows/build-msix.ps1 with the reserved Identity Name." />
+  </Target>
+</Project>

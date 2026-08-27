@@ -54,7 +54,7 @@ def _normalize_security(row: dict[str, Any]) -> dict[str, Any]:
         "name_en": name,
         "official_name": official_name,
         "group": "NASDAQ100",
-        "tradable": bool(row.get("tradable", True)),
+        "research_included": bool(row.get("research_included", True)),
         "data_available": bool(row.get("data_available", True)),
     }
 
@@ -95,19 +95,25 @@ def fetch_official_nasdaq100() -> dict[str, Any]:
         raise NasdaqUniverseError(f"Nasdaq成分证券数量异常：{len(normalized)}")
     if len(codes) != len(set(codes)):
         raise NasdaqUniverseError("Nasdaq官方成分股出现重复代码")
+    as_of = str(data.get("date") or (data.get("data") or {}).get("asOf") or "")
+    try:
+        snapshot_date = datetime.strptime(as_of, "%b %d, %Y").date().isoformat()
+    except ValueError:
+        snapshot_date = ""
     return {
         "market": "US",
         "index": "NASDAQ-100",
         "index_symbol": "NDX",
         "benchmark": "US.QQQ",
         "prediction_horizon_days": 5,
-        "execution": "MOOMOO_SIMULATE_ONLY",
+        "product_mode": "WINDOWS_STORE_READ_ONLY",
         "official_source": OFFICIAL_NASDAQ100_URL,
-        "constituent_as_of": str(data.get("date") or ""),
+        "constituent_as_of": as_of,
+        "snapshot_date": snapshot_date,
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "constituent_company_count": 100,
         "constituent_security_count": len(normalized),
-        "ranking_method": "AEGIS_CURRENT_TECHNICAL_MODEL",
+        "ranking_method": "AEGIS_TECHNICAL_RESEARCH_SNAPSHOT",
         "securities": normalized,
     }
 

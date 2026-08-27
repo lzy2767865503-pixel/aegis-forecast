@@ -1,0 +1,44 @@
+{
+  "model_name": "Aegis Nasdaq-100 Deterministic Synthetic Scenario",
+  "version": "1.5.0",
+  "strategy_profile": "TECHNICAL_RESEARCH_SNAPSHOT",
+  "benchmark": {
+    "code": "US.QQQ",
+    "name": "Invesco QQQ Trust"
+  },
+  "generation": {
+    "method": "stable-sha256-v1",
+    "market_observations": false,
+    "model_training": false,
+    "performance_claims": false
+  },
+  "factor_weights": {
+    "trend": 0.28,
+    "momentum": 0.22,
+    "relative_strength": 0.22,
+    "volume_price": 0.12,
+    "structure": 0.10,
+    "risk_quality": 0.06
+  },
+  "gates": {
+    "default_score_threshold": 62,
+    "minimum_confirmations": 3,
+    "minimum_rsi": 40,
+    "maximum_rsi": 82,
+    "maximum_atr_pct": 0.15,
+    "maximum_volume_ratio": 6.0,
+    "risk_off_score_addon": 4,
+    "minimum_scenario_up_score": 0.54,
+    "minimum_scenario_pattern_score": 0.30,
+    "require_trend_confirmation": true,
+    "require_relative_strength_confirmation": true,
+    "require_pattern_confirmation": false,
+    "maximum_names": 5
+  },
+  "integrity": {
+    "expected_illustrative_outcome_rows": 300,
+    "maximum_score_threshold": 62,
+    "threshold_grid": [60, 62, 64, 66, 68, 70, 72, 74, 76, 78],
+    "metrics_derived_from_shipped_rows": true
+  }
+}

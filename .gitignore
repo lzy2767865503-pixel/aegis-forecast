@@ -12,6 +12,11 @@ htmlcov/
 
 frontend/node_modules/
 frontend/dist/
+artifacts/
+desktop/windows/.vs/
+desktop/windows/**/AppPackages/
+desktop/windows/**/bin/
+desktop/windows/**/obj/
 
 # Runtime state and broker-derived data are never published.
 storage/
