@@ -1,39 +1,47 @@
 # Reproducibility
 
-## Clean-room verification
+## Portable source gate
 
 ```bash
-git clone https://github.com/lzy2767865503-pixel/aegis-forecast.git
-cd aegis-forecast
 corepack enable
 corepack prepare pnpm@10.34.5 --activate
 ./scripts/setup.sh
 ./scripts/verify.sh
+./scripts/verify.sh
 ```
 
-The demo generator uses SHA-256-derived stable values from public symbol
-strings. `--check` compares every committed artifact byte-for-byte with newly
-generated output.
+The scenario generator derives deterministic values from public security symbols
+with stable salted SHA-256 fractions. It does not read historical observations,
+train a model, or produce a backtest.
+`--check` compares five committed artifacts byte-for-byte. The official
+Nasdaq-100 membership snapshot is dated **2026-08-26**; demo values are synthetic
+and are not market observations.
 
-Python runtime and optional Moomoo dependencies are fully pinned in
-`requirements.lock.txt` and `requirements-moomoo.lock.txt`. The frontend uses a
-frozen pnpm lockfile. `.python-version`, `.nvmrc` and the `packageManager` field
-record the reference toolchain.
+## Windows candidate and native QA
 
-## Supported environments
+The pipeline pins Python 3.13.14, Node 22.23.1, pnpm 10.34.5, .NET SDK 8.0.424,
+PyInstaller and NuGet packages. Python build dependencies and all transitives
+are hash-locked. One active-interactive self-hosted Windows job runs source/audit
+gates, freezes the sidecar/legal bytes, restores NuGet in locked mode and builds
+one technical-Publisher development MSIX from the reserved Identity Name. It
+then runs native QA rounds 1 and 2 sequentially,
+followed by strict WACK reset/test, without rebuilding, resigning, downloading,
+or copying the candidate between rounds. Every stage verifies the same SHA-256
+before and after use. The Store workflow uploads no Actions artifact; it writes
+only a fixed Job Summary after strict private schema validation.
 
-CI verifies Python 3.10 and 3.12 on Ubuntu through the same `scripts/setup.sh`
-clean-room path used by a new clone, with Node.js 22.23.1 and pnpm 10.34.5. The
-macOS launcher uses the same Python service and compiled frontend.
+See `docs/windows/TWO_PASS_QA.md`. PyInstaller is not a cross-compiler; macOS
+freezing cannot be reported as Windows/Store certification.
 
-## Expected result
+## Expected safety result
 
-- all unit tests pass;
-- the tracked-file privacy scan passes;
-- the frontend production bundle compiles;
-- `/api/health` reports `executionEnabled: false`;
-- `/api/signals?limit=8` returns eight deterministic rows;
-- `/` serves the Aegis Forecast frontend.
-
-Private Moomoo validation is deliberately outside public CI because it requires
-a locally authenticated vendor gateway and a user-owned simulation account.
+- health reports `WINDOWS_STORE_READ_ONLY`, offline synthetic mode and execution
+  disabled;
+- unauthenticated, cross-origin and invalid-host requests fail;
+- all legacy transaction/execution/scheduler route families return HTTP 403;
+- brokerage/account/history routes are absent;
+- frozen/MSIX contents exclude financial/account/execution dependencies;
+- UI identifies Simplified-Chinese-only, deterministic-synthetic limitations;
+- marker-bound allowlisted deletion preserves unknown LocalState siblings;
+- runtime scenario metrics exactly equal a fresh calculation over all 300
+  shipped illustrative rows.

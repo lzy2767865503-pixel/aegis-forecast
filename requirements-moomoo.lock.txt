@@ -1,6 +1,6 @@
-# Optional, fully pinned Moomoo simulation dependency set.
+# Optional, fully pinned Moomoo read-only connector dependency set.
 -r requirements.lock.txt
-moomoo-api==10.9.6908
+moomoo-api==10.10.7008
 protobuf==6.33.6
 pycryptodome==3.23.0
 simplejson==4.1.1

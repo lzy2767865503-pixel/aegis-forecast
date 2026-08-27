@@ -1,11 +1,10 @@
-"""Aegis A local quantitative research and paper-trading platform."""
+"""Aegis Forecast local quantitative research platform."""
 
 from .environment import load_project_env
 
 
-# Load project-local defaults before importing modules that read os.environ.
-# Existing process variables always win, and the parser never executes shell
-# expressions from the file.
+# Developer settings can configure read-only data sources, but the Store safety
+# policy is compiled into ``runtime_policy`` and cannot be changed by ``.env``.
 load_project_env()
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"

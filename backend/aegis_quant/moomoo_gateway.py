@@ -1,25 +1,24 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import importlib.util
+import ipaddress
 import math
 import os
-import subprocess
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from .audit import AuditLedger
+from .runtime_policy import require_execution_allowed
 
 
 SIMULATE_ENVIRONMENT = "SIMULATE"
-SUPPORTED_SIDES = {"BUY", "SELL"}
-SUPPORTED_ORDER_TYPES = {"LIMIT", "MARKET"}
 EASTERN_TIME = ZoneInfo("America/New_York")
 
 
@@ -28,6 +27,19 @@ class GatewayConfig:
     host: str = os.environ.get("AEGIS_MOOMOO_HOST", "127.0.0.1")
     port: int = int(os.environ.get("AEGIS_MOOMOO_PORT", "11111"))
     security_firm: str = os.environ.get("AEGIS_MOOMOO_SECURITY_FIRM", "FUTUMY")
+
+    def __post_init__(self) -> None:
+        if not 1 <= int(self.port) <= 65535:
+            raise ValueError("OpenD port must be between 1 and 65535")
+        host = self.host.strip().lower()
+        if host == "localhost":
+            return
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return
+        except ValueError:
+            pass
+        raise ValueError("Aegis Store 版只允许连接本机 loopback OpenD")
 
 
 class MoomooSimulationGateway:
@@ -47,8 +59,8 @@ class MoomooSimulationGateway:
         self.allowed_codes = {str(code).upper() for code in allowed_codes}
         self.config = config or GatewayConfig()
         self.audit = audit or AuditLedger()
-        # OpenD is a local stateful gateway.  Keep SDK sessions serialized so
-        # HTTP requests and the trading scheduler cannot create a connection
+        # OpenD is a local stateful gateway. Keep read-only SDK sessions
+        # serialized so concurrent UI refreshes cannot create a connection
         # storm that destabilizes the vendor process.
         self._sdk_lock = threading.RLock()
         self._status_cache: tuple[float, dict[str, Any]] | None = None
@@ -67,6 +79,14 @@ class MoomooSimulationGateway:
             self.allowed_codes = {str(code).upper() for code in codes}
             self._quote_cache.clear()
 
+    def clear_session_data(self) -> None:
+        """Forget all in-memory broker-derived data when consent is revoked."""
+
+        with self._sdk_lock:
+            self._status_cache = None
+            self._account_cache = None
+            self._quote_cache.clear()
+
     def _sdk_name(self) -> str | None:
         for name in ("moomoo", "futu"):
             if importlib.util.find_spec(name) is not None:
@@ -74,22 +94,9 @@ class MoomooSimulationGateway:
         return None
 
     def _opend_process_running(self) -> bool | None:
-        """Check local OpenD without opening an invalid empty TCP session."""
-        if self.config.host not in {"127.0.0.1", "localhost", "::1"}:
-            return None
-        try:
-            result = subprocess.run(
-                ["/usr/bin/pgrep", "-f", "moomoo_OpenD.app/Contents/MacOS/moomoo_OpenD"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=1.0,
-                check=False,
-            )
-            return result.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            # On a non-macOS runtime, fall through to the SDK's proper
-            # protocol handshake rather than making a raw port probe.
-            return None
+        """Let the official SDK perform its protocol handshake on Windows."""
+
+        return None
 
     @staticmethod
     def _masked_account(account_id: Any) -> str:
@@ -202,7 +209,7 @@ class MoomooSimulationGateway:
     def _safe_order(cls, row: dict[str, Any]) -> dict[str, Any]:
         order_id = str(row.get("order_id") or "")
         return {
-            "orderId": order_id,
+            "orderKey": hashlib.sha256(order_id.encode("utf-8")).hexdigest()[:16] if order_id else "",
             "orderIdMasked": f"••{order_id[-8:]}" if order_id else "—",
             "code": str(row.get("code") or "").upper(),
             "name": str(row.get("stock_name") or ""),
@@ -464,72 +471,13 @@ class MoomooSimulationGateway:
             return {**base, "state": "OPEND_ERROR", "message": f"OpenD 尚未就绪：{exc}"}
 
     def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
-        with self._sdk_lock:
-            self._status_cache = None
-            try:
-                return self._submit_order_uncached(order)
-            finally:
-                # A submitted paper order changes funds, positions and order
-                # statistics; never serve an account cache across submission.
-                self._account_cache = None
-                self._quote_cache.clear()
+        """Reject execution before SDK import, connection or account lookup."""
+
+        self.assert_simulation_environment(str(order.get("environment") or SIMULATE_ENVIRONMENT))
+        require_execution_allowed()
 
     def _submit_order_uncached(self, order: dict[str, Any]) -> dict[str, Any]:
+        """Legacy private name retained only as a fail-closed compatibility stub."""
+
         self.assert_simulation_environment(str(order.get("environment") or SIMULATE_ENVIRONMENT))
-        code = str(order.get("code") or "").upper()
-        side = str(order.get("side") or "").upper()
-        quantity = int(order.get("quantity") or 0)
-        price = float(order.get("price") or 0)
-        order_type = str(order.get("orderType") or "LIMIT").upper()
-        if code not in self.allowed_codes:
-            raise ValueError("该股票不在当前 Nasdaq-100 成分证券池内")
-        if side not in SUPPORTED_SIDES:
-            raise ValueError("模拟单方向只能是 BUY 或 SELL")
-        if order_type not in SUPPORTED_ORDER_TYPES:
-            raise ValueError("模拟单类型只能是 LIMIT 或 MARKET")
-        if quantity <= 0 or (order_type == "LIMIT" and price <= 0):
-            raise ValueError("模拟单数量必须大于零；限价单价格必须大于零")
-
-        state = self.status()
-        if not state["connected"]:
-            raise RuntimeError(state["message"])
-
-        sdk = importlib.import_module(self._sdk_name() or "moomoo")
-        context, accounts = self._simulation_accounts(sdk)
-        trace_id = str(uuid.uuid4())
-        try:
-            if not accounts:
-                raise RuntimeError("未发现可用的美股模拟账户")
-            account_id = accounts[0]["acc_id"]
-            trd_side = sdk.TrdSide.BUY if side == "BUY" else sdk.TrdSide.SELL
-            sdk_order_type = sdk.OrderType.MARKET if order_type == "MARKET" else sdk.OrderType.NORMAL
-            ret, data = context.place_order(
-                price=price,
-                qty=quantity,
-                code=code,
-                trd_side=trd_side,
-                order_type=sdk_order_type,
-                trd_env=sdk.TrdEnv.SIMULATE,
-                acc_id=account_id,
-                remark=str(order.get("remark") or "AEGIS_MANUAL_SIM")[:64],
-            )
-            if ret != sdk.RET_OK:
-                raise RuntimeError(str(data))
-            records = data.to_dict("records") if hasattr(data, "to_dict") else []
-            result = records[0] if records else {}
-            safe_result = {
-                "orderId": str(result.get("order_id") or ""),
-                "code": code,
-                "side": side,
-                "quantity": quantity,
-                "price": price,
-                "orderType": order_type,
-                "status": str(result.get("order_status") or "SUBMITTED"),
-                "environment": SIMULATE_ENVIRONMENT,
-                "sentToLiveBroker": False,
-                "traceId": trace_id,
-            }
-            self.audit.append("ORDER", "MOOMOO_SIMULATION_ORDER_SUBMITTED", safe_result, trace_id)
-            return safe_result
-        finally:
-            context.close()
+        require_execution_allowed()

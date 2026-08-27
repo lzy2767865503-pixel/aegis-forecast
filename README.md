@@ -1,166 +1,125 @@
-# Aegis Forecast
+# Quant Scenario Studio by LAI ZEYU
 
-**A privacy-safe, simulation-only Nasdaq-100 quantitative research
-workstation.**
+**Windows Store Read-Only Edition of the Aegis Forecast research engine.**
 
-**Created and maintained by
-[LAI ZEYU](https://github.com/lzy2767865503-pixel).**
+Quant Scenario Studio is a local, Simplified-Chinese Nasdaq-100 scenario
+research and education application. Store version 1.5.0 uses the official
+Nasdaq-100 constituent snapshot dated **2026-08-26** and deterministic synthetic
+values. It does not display live or latest market data.
 
-Aegis Forecast combines a Python research engine, deterministic technical
-factor ranking, walk-forward model evaluation, a React monitoring console,
-hash-chained audit records and an optional Moomoo OpenD simulation adapter.
-Real-money execution is permanently rejected in code.
+> Deterministic synthetic demo only. Not market data, investment advice, an
+> order tool or a promise of future performance.
 
-> Research software only. The bundled dataset is synthetic, the displayed
-> results are not investment advice, and no return or accuracy is guaranteed.
+Created and maintained by
+[LAI ZEYU（来泽宇）](https://github.com/lzy2767865503-pixel). The Store
+visible `PublisherDisplayName` is separately fixed to **LAI ZEYU**. Partner
+Center's non-visible package Name is injected only after reservation, and its
+technical Publisher is this account's GUID-form CN—not an author signature. The
+repository and internal engine retain the historical name **Aegis Forecast**.
 
-![Aegis Forecast synthetic-data dashboard](docs/assets/dashboard-demo.png)
+![Synthetic-data dashboard](docs/assets/dashboard-demo.png)
 
-## What makes this repository reproducible
+## Store boundary
 
-- A fresh clone starts with deterministic synthetic artifacts and does not
-  require a brokerage account.
-- Broker data, account snapshots, orders, positions, logs, databases,
-  credentials and personal documents are excluded from version control.
-- Simulation execution is disabled by default and requires an explicit
-  environment flag.
-- CI verifies Python 3.10 and 3.12, deterministic fixtures, unit tests,
-  frontend compilation and a live HTTP smoke test.
-- The same commands used locally are documented and run in GitHub Actions.
+- The Store package contains no brokerage SDK, account connector, transaction
+  implementation, scheduler, legacy execution module or private-data pipeline.
+- `WINDOWS_STORE_READ_ONLY` is compiled into the runtime. REAL, LIVE and
+  SIMULATE execution paths receive a fail-closed HTTP 403 response.
+- The package always loads the bundled deterministic synthetic artifacts. An
+  environment variable cannot switch it to private or market data.
+- The sidecar binds only to loopback and requires a fresh per-process session,
+  same-origin requests and CSRF protection for mutations.
+- There is no telemetry, cloud account, remote data endpoint, advertising ID or
+  background network service.
+- App-owned settings, integrity checks and audit evidence use marker-bound
+  package LocalState. In-app deletion requires the exact ownership binding and
+  removes only allowlisted app paths.
 
 ## Product capabilities
 
-- **Nasdaq-100 universe layer** - frozen public constituent snapshot with an
-  official-source synchronizer and duplicate-security validation.
-- **Pure technical ranking** - trend, momentum, relative strength,
-  price-volume, market structure and volatility/risk-quality factors.
-- **Evidence-aware model evaluation** - purged walk-forward framing,
-  probability calibration, minimum-sample gates, transaction-cost assumptions
-  and explicit refusal to claim an edge when the confidence bound fails.
-- **Decision plans** - breakout and pullback entries, ATR-based invalidation,
-  staged exits, trailing stops, time stops and per-name intraday simulation
-  bands.
-- **Simulation broker boundary** - US-symbol allowlist, `SIMULATE` environment
-  enforcement, masked identifiers and no credential handling.
-- **Operational observability** - autonomous heartbeat, P&L ledger, daily /
-  weekly / monthly / yearly aggregation, model-health views and data
-  provenance.
-- **Model governance** - Champion/Challenger registry, shadow evaluation,
-  human approval and rollback-oriented audit evidence.
-- **Tamper evidence** - SHA-256 chained audit events for model, data and
-  simulated execution decisions.
+- Nasdaq-100 **2026-08-26** constituent snapshot (100 companies, 102 securities);
+- stable-hash deterministic synthetic factor-ranking and illustrative scenarios;
+- neutral confirmation, reference, invalidation and sensitivity thresholds;
+- runtime metrics recalculated from all 300 shipped illustrative rows;
+- local file-integrity checks and SHA-256 chained audit evidence;
+- privacy notice and allowlisted deletion of local application state.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U["Nasdaq-100 universe"] --> D["Market artifacts or synthetic demo"]
-    D --> F["Technical factor pipeline"]
-    F --> W["Walk-forward evaluation and calibration"]
-    W --> S["Ranked signals and entry/exit plans"]
-    S --> API["Python HTTP service"]
-    API --> UI["React monitoring console"]
-    API --> A["Hash-chained audit and P&L ledger"]
-    API -. "explicit opt-in" .-> M["Moomoo OpenD SIMULATE adapter"]
-    M -. "REAL rejected" .-> X["No live-money route"]
+    W["WinUI 3 desktop shell"] --> V["WebView2 Simplified-Chinese UI"]
+    W --> P["PyInstaller onedir sidecar"]
+    V -->|"authenticated loopback session"| P
+    P --> R["Aegis read-only research engine"]
+    R --> D["2026-08-26 stable-hash illustrative scenario"]
+    P --> X["Execution route families fail closed"]
 ```
 
-## Quick start
+Windows application state is stored only after the package LocalState path and
+PFN binding supplied by `ApplicationData.Current.LocalFolder` are recorded in
+an app ownership marker. Install resources remain read-only. See
+[Architecture](docs/ARCHITECTURE.md).
 
-Prerequisites:
+## Source verification
 
-- Python 3.10+ (`3.12.13` is recorded in `.python-version`)
-- Node.js 20+ (`22.23.1` is recorded in `.nvmrc`)
-- pnpm 10+ (`10.34.5` is recorded in `frontend/package.json`)
+Reference toolchain:
+
+- Python `3.13.14` (`.python-version`; official Windows x64 build)
+- Node.js `22.23.1` (`.nvmrc`)
+- pnpm `10.34.5`
+- .NET SDK `8.0.424` (`global.json`)
 
 ```bash
-git clone https://github.com/lzy2767865503-pixel/aegis-forecast.git
-cd aegis-forecast
 corepack enable
 corepack prepare pnpm@10.34.5 --activate
 ./scripts/setup.sh
-./scripts/run.sh
-```
-
-Open [http://127.0.0.1:8766](http://127.0.0.1:8766).
-
-On macOS, `run_aegis_a.command` provides the same safe local startup flow.
-
-## Verify the entire stack
-
-```bash
 ./scripts/verify.sh
 ```
 
-The verification gate checks:
-
-1. deterministic demo artifacts are current;
-2. Python unit and safety-boundary tests pass;
-3. the React production build succeeds;
-4. a temporary local server returns healthy API, signal and HTML responses;
-5. simulation execution remains disabled.
-
-## Optional Moomoo simulation integration
-
-The public demo does not need Moomoo. To connect your own OpenD simulation
-environment:
-
-```bash
-./scripts/setup.sh --with-moomoo
-cp .env.example .env
-```
-
-The application safely reads the root `.env` without executing it as shell
-code. Variables already exported by the operator take precedence over `.env`
-values. Do not commit `.env`.
-
-Keep OpenD on `127.0.0.1:11111`. Credentials and trade-unlock secrets stay
-inside OpenD; this application never accepts them.
-
-Read-only account monitoring works when OpenD is available. Automated
-simulation execution remains off unless the operator deliberately sets:
-
-```bash
-export AEGIS_ENABLE_SIMULATION_EXECUTION=1
-```
-
-Even with that flag, the adapter rejects any environment other than
-`SIMULATE`. There is no real-money implementation.
+Windows packaging and certification commands are documented in
+[packaging/windows/README.md](packaging/windows/README.md). PyInstaller is not a
+cross-compiler: an x64 MSIX and Windows App Certification Kit result must be
+produced on Windows.
 
 ## Repository map
 
 ```text
-backend/aegis_quant/   HTTP service, broker boundary, audit, P&L and governance
-technical_model/      factor engineering, scoring and walk-forward evaluation
-frontend/             React/Vite monitoring console
-config/               universe and model policy
-demo_data/            deterministic synthetic artifacts
-scripts/              setup, run, fixture generation and full verification
-tests/                unit, safety-boundary and reproducibility tests
-docs/                 architecture, model card, privacy and operating limits
+backend/aegis_quant/   Store sidecar, policy, privacy and research APIs
+technical_model/      source research algorithms (not all enter Store package)
+frontend/             React/Vite WebView2 console
+desktop/windows/      WinUI 3 lifecycle shell and MSIX manifest
+packaging/windows/    Store-only PyInstaller spec and legal inventory
+scripts/windows/      candidate build, two-round native QA and evidence scripts
+config/               bundled read-only snapshot and research policy
+demo_data/            deterministic synthetic artifacts dated 2026-08-26
+tests/                reproducibility, API, deletion and fail-closed tests
+docs/windows/          Store listing, privacy, certification and release runbook
 ```
-
-## Engineering boundaries
-
-- Localhost only by default; do not expose this HTTP service directly to the
-  internet.
-- Demo metrics are illustrative and cannot support investment claims.
-- The repository does not redistribute broker-derived market history.
-- Nasdaq-100 membership changes over time; the committed universe is a
-  reproducible snapshot, not a promise of current membership.
-- Model “self-learning” means governed offline evaluation, never runtime code
-  rewriting or automatic promotion into live trading.
-
-See [Architecture](docs/ARCHITECTURE.md),
-[Model Card](docs/MODEL_CARD.md),
-[Reproducibility](docs/REPRODUCIBILITY.md) and
-[Privacy](docs/PRIVACY.md).
-
-## Author
-
-Designed, engineered and published by
-[LAI ZEYU](https://github.com/lzy2767865503-pixel).
 
 ## License
 
-MIT
+MIT. The MSIX includes `Legal/LICENSE.txt`, `Legal/THIRD_PARTY_NOTICES.md` and
+the upstream dependency license inventory.
+
+## Windows distribution boundaries
+
+- Microsoft Store verification is owner-dispatched (and may only be rerun by
+  that same owner) from the exact protected `main` commit. One unsigned
+  Partner Center MSIX is built, copied once, and only the temporary QA copy is
+  signed with the ephemeral technical-Publisher certificate. Exact payload-tree
+  equivalence is proved before nonce-bound QA twice and complete bounded WACK
+  twice on the unchanged QA-copy bytes. Only the original unsigned submission,
+  checksum and non-secret lineage JSON are retained under an exact ACL on a
+  pre-provisioned local fixed-NTFS handoff root on that runner; the QA copy,
+  certificate and detailed evidence are deleted and no Store package is ever
+  uploaded to GitHub.
+- GitHub distribution is a separate portable ZIP. The protected manual workflow
+  gives the checkout/sign/test job read-only repository permission. After CKA
+  unload, certificate removal and hash-bound silent uninstall, it hands only the tested ZIP/checksum to a separate write-only,
+  no-checkout publisher. Every recursively discovered PE must have exactly one
+  SHA-256/RFC 3161 signature index from the same publicly trusted signer whose
+  SimpleName is exactly `LAI ZEYU` or `来泽宇`. The publisher uses a unique
+  per-run marker and exact Release ID for upload/publication, re-downloads and
+  revalidates private and public bytes, and restores only its immutable
+  ID/node-ID/creation-time-bound object to draft if any later gate fails.

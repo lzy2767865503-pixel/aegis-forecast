@@ -1,9 +1,12 @@
 {
-  "asOfLabel": "2026-07-20",
+  "asOfLabel": "2026-08-26",
   "containsBrokerData": false,
   "containsCredentials": false,
+  "containsMarketObservations": false,
   "containsPersonalData": false,
-  "description": "Generated locally from the public universe symbols using stable hashes. Values are illustrative and are not market observations.",
-  "kind": "DETERMINISTIC_SYNTHETIC_DEMO",
+  "containsTrainingOutput": false,
+  "description": "Generated locally from public universe symbols using stable SHA-256 hashes. Every numeric value is illustrative and is not a market observation, model training result, backtest, or performance claim.",
+  "illustrativeOutcomeSamples": 300,
+  "kind": "DETERMINISTIC_SYNTHETIC_SCENARIO",
   "securityCount": 102
 }

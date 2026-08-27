@@ -1,0 +1,44 @@
+{
+  "buckets": [
+    {
+      "bucket": "0%-40%",
+      "illustrative_up_frequency": 0.465517,
+      "mean_scenario_up_score": 0.363537,
+      "sample_count": 58
+    },
+    {
+      "bucket": "40%-50%",
+      "illustrative_up_frequency": 0.470588,
+      "mean_scenario_up_score": 0.453299,
+      "sample_count": 68
+    },
+    {
+      "bucket": "50%-60%",
+      "illustrative_up_frequency": 0.481928,
+      "mean_scenario_up_score": 0.54866,
+      "sample_count": 83
+    },
+    {
+      "bucket": "60%-70%",
+      "illustrative_up_frequency": 0.441176,
+      "mean_scenario_up_score": 0.647217,
+      "sample_count": 68
+    },
+    {
+      "bucket": "70%-100%",
+      "illustrative_up_frequency": 0.565217,
+      "mean_scenario_up_score": 0.717173,
+      "sample_count": 23
+    }
+  ],
+  "claim_boundary": "ILLUSTRATIVE_GENERATED_SAMPLES_ONLY",
+  "dataset": "DETERMINISTIC_SYNTHETIC_SCENARIO",
+  "derived_from": "illustrative_scenario_outcomes.csv",
+  "illustrative_brier_score": 0.264111,
+  "illustrative_bucket_gap": 0.10045,
+  "mean_scenario_up_score": 0.526513,
+  "overall_illustrative_up_frequency": 0.473333,
+  "sample_count": 300,
+  "selected_illustrative_up_frequency": 0.495935,
+  "selected_scenario_count": 123
+}

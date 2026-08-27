@@ -6,47 +6,57 @@ import Topbar from './components/Topbar'
 import Overview from './views/Overview'
 import {
   AuditView,
+  AboutView,
+  ConsistencyView,
   DataView,
   FactorsView,
-  LearningView,
-  MoomooView,
-  AutonomyView,
-  ProfitView,
-  PredictionsView,
-  ValidationView,
+  IntegrityView,
+  PrivacyView,
+  ScenariosView,
 } from './views/SecondaryViews'
 
 const emptyData = {
+  health: null,
   status: null,
-  autonomy: null,
   signals: null,
   universe: null,
-  learning: null,
+  integrity: null,
   performance: null,
-  pnl: null,
   audit: null,
   dataStatus: null,
   factors: null,
-  moomoo: null,
-  moomooAccount: null,
+  privacy: null,
 }
 
 export default function App() {
   const [active, setActive] = useState('overview')
   const [data, setData] = useState(emptyData)
-  const [busy, setBusy] = useState({ initial: true, refresh: false, learning: false, universe: false, broker: false })
+  const [busy, setBusy] = useState({ initial: true, verify: false, integrity: false, privacy: false, deleting: false })
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [selectedSignal, setSelectedSignal] = useState(null)
+  const [coreApiReady, setCoreApiReady] = useState(false)
+  const closeSignal = useCallback(() => setSelectedSignal(null), [])
 
   const load = useCallback(async () => {
     try {
-      const [status, autonomy, signals, universe, learning, performance, pnl, audit, dataStatus, factors, moomoo, moomooAccount] = await Promise.all([
-        api.status(), api.autonomy(), api.signals(), api.universe(), api.learning(), api.performance(), api.pnl(), api.audit(), api.data(), api.factors(), api.moomoo(), api.moomooAccount().catch(() => null),
+      const [health, status, signals, universe, integrity, performance, audit, dataStatus, factors, privacy] = await Promise.all([
+        api.health(), api.status(), api.signals(), api.universe(), api.integrity(), api.performance(), api.audit(), api.data(), api.factors(), api.privacy(),
       ])
-      setData({ status, autonomy, signals, universe, learning, performance, pnl, audit, dataStatus, factors, moomoo, moomooAccount })
+      const ready = health?.ok === true
+        && health?.storeReadOnly === true
+        && health?.executionEnabled === false
+        && status?.system?.storeReadOnly === true
+        && status?.system?.dataMode === 'DETERMINISTIC_SYNTHETIC_SCENARIO'
+        && Array.isArray(signals?.items) && signals.items.length > 0
+        && Array.isArray(universe?.items) && universe.items.length > 0
+        && dataStatus?.dataMode === 'DETERMINISTIC_SYNTHETIC_SCENARIO'
+      if (!ready) throw new Error('核心只读说明性数据 API 未通过完整性检查')
+      setData({ health, status, signals, universe, integrity, performance, audit, dataStatus, factors, privacy })
+      setCoreApiReady(true)
       setError('')
     } catch (requestError) {
+      setCoreApiReady(false)
       setError(requestError.message)
     } finally {
       setBusy((current) => ({ ...current, initial: false }))
@@ -59,113 +69,114 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [load])
 
-  async function refreshPredictions() {
-    setBusy((current) => ({ ...current, refresh: true }))
+  async function verifyScenario() {
+    setBusy((current) => ({ ...current, verify: true }))
     setNotice('')
     try {
-      const result = await api.refreshPredictions()
-      setNotice(result.message || '预测已刷新')
+      const result = await api.verifyScenario()
+      setNotice(result.message || '说明性情景已核对')
       await load()
     } catch (requestError) {
       setError(requestError.message)
     } finally {
-      setBusy((current) => ({ ...current, refresh: false }))
+      setBusy((current) => ({ ...current, verify: false }))
     }
   }
 
-  async function runLearning() {
-    setBusy((current) => ({ ...current, learning: true }))
+  async function runIntegrityCheck() {
+    setBusy((current) => ({ ...current, integrity: true }))
     try {
-      await api.runLearning()
-      setNotice('学习评估已完成；不满足证据门槛时不会替换模型')
+      await api.runIntegrityCheck()
+      setNotice('说明性生成文件完整性核对完成；应用不训练或替换模型')
       await load()
     } finally {
-      setBusy((current) => ({ ...current, learning: false }))
+      setBusy((current) => ({ ...current, integrity: false }))
     }
   }
 
-  async function syncUniverse() {
-    setBusy((current) => ({ ...current, universe: true }))
+  async function updatePrivacy(settings) {
+    setBusy((current) => ({ ...current, privacy: true }))
     try {
-      await api.syncUniverse()
-      setNotice('证券主表已同步')
-      await load()
-    } finally {
-      setBusy((current) => ({ ...current, universe: false }))
-    }
-  }
-
-  async function submitSimulationOrder(order) {
-    setBusy((current) => ({ ...current, broker: true }))
-    setNotice('')
-    try {
-      const result = await api.submitMoomooOrder(order)
-      setNotice(`模拟委托已提交：${result.code} ${result.side} ${result.quantity}股 · ${result.status}`)
-      await load()
-      return result
-    } catch (requestError) {
-      setError(requestError.message)
-      throw requestError
-    } finally {
-      setBusy((current) => ({ ...current, broker: false }))
-    }
-  }
-
-  async function setTTradingEnabled(enabled) {
-    setBusy((current) => ({ ...current, broker: true }))
-    try {
-      await api.updateTTrading({ enabled })
-      setNotice(enabled ? '自动做T训练已启用：仅模拟盘' : '自动做T训练已暂停')
+      await api.updatePrivacy(settings)
+      setNotice('隐私选择已保存在本机')
       await load()
     } catch (requestError) {
       setError(requestError.message)
     } finally {
-      setBusy((current) => ({ ...current, broker: false }))
+      setBusy((current) => ({ ...current, privacy: false }))
+    }
+  }
+
+  async function deleteLocalData() {
+    if (!window.confirm('删除 Quant Scenario Studio 的全部本地运行数据？合成演示数据和应用本身会保留。')) return
+    setBusy((current) => ({ ...current, deleting: true }))
+    try {
+      const result = await api.deleteLocalData()
+      setNotice(result.message)
+      await load()
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy((current) => ({ ...current, deleting: false }))
     }
   }
 
   const actions = useMemo(() => ({
     selectSignal: setSelectedSignal,
-    refreshPredictions,
-    runLearning,
-    syncUniverse,
-    submitSimulationOrder,
-    setTTradingEnabled,
+    verifyScenario,
+    runIntegrityCheck,
+    updatePrivacy,
+    deleteLocalData,
   }), [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const views = {
     overview: <Overview data={data} actions={actions} />,
-    predictions: <PredictionsView signals={data.signals} onSelect={setSelectedSignal} />,
-    simulation: <MoomooView moomoo={data.moomoo} account={data.moomooAccount} universe={data.universe} onSubmit={submitSimulationOrder} onToggle={setTTradingEnabled} busy={busy.broker} />,
-    profit: <ProfitView pnl={data.pnl} account={data.moomooAccount} />,
-    autonomy: <AutonomyView autonomy={data.autonomy} moomoo={data.moomoo} account={data.moomooAccount} />,
-    validation: <ValidationView performance={data.performance} />,
+    scenarios: <ScenariosView signals={data.signals} onSelect={setSelectedSignal} />,
+    consistency: <ConsistencyView performance={data.performance} />,
     factors: <FactorsView factors={data.factors} signals={data.signals} />,
-    data: <DataView dataStatus={data.dataStatus} universe={data.universe} onSync={syncUniverse} busy={busy.universe} />,
-    learning: <LearningView learning={data.learning} onRun={runLearning} busy={busy.learning} />,
+    data: <DataView dataStatus={data.dataStatus} universe={data.universe} />,
+    integrity: <IntegrityView integrity={data.integrity} onRun={runIntegrityCheck} busy={busy.integrity} />,
     audit: <AuditView audit={data.audit} />,
+    privacy: <PrivacyView privacy={data.privacy} onPrivacy={updatePrivacy} onDelete={deleteLocalData} busy={busy.privacy} deleting={busy.deleting} />,
+    about: <AboutView />,
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      data-product="Quant Scenario Studio by LAI ZEYU"
+      data-author="LAI ZEYU（来泽宇）"
+      data-store-read-only="true"
+      data-privacy="local-only-no-telemetry"
+      data-demo="deterministic-synthetic-2026-08-26"
+      data-language="zh-CN"
+    >
+      {coreApiReady && <span id="store-readiness" className="visually-hidden" data-api-health="true" data-core-data="true">Quant Scenario Studio by LAI ZEYU · LAI ZEYU（来泽宇） · Store 只读 · API 健康 · 核心说明性数据已载入 · 隐私：本机且无遥测 · 2026-08-26 确定性合成演示</span>}
       <Sidebar active={active} onChange={setActive} />
       <div className="workspace">
-        <Topbar status={data.status} busy={busy.refresh} onRefresh={refreshPredictions} />
+        <Topbar status={data.status} busy={busy.verify} onRefresh={verifyScenario} />
         <main className="main-content">
+          {!busy.initial && !data.privacy?.researchNoticeAccepted && (
+            <div className="message-banner notice" role="status">
+              本软件仅用于研究、教育与合成模拟，不提供下单，不构成投资建议。
+              <button type="button" onClick={() => setActive('privacy')}>阅读并确认</button>
+            </div>
+          )}
           {error && <div className="message-banner error">服务异常：{error}</div>}
           {notice && <div className="message-banner success">{notice}</div>}
-          {busy.initial ? <div className="loading-state">正在载入预测工作站…</div> : views[active]}
+          {busy.initial ? <div className="loading-state">正在载入说明性情景工作站…</div> : views[active]}
         </main>
         <footer className="status-footer">
-          <span>范围：Nasdaq-100当前成分证券</span>
-          <span>预测周期：5个交易日</span>
-          <span>数据：<b>{data.status?.system?.demoData ? '合成演示' : data.moomoo?.connected ? 'Moomoo模拟盘' : '等待OpenD'}</b></span>
-          <span>后台：<b>{data.autonomy?.healthy ? '30秒心跳正常' : '检查中'}</b></span>
-          <span>Built by <b>LAI ZEYU</b></span>
-          <strong>真实盘永久禁用 · 不构成投资建议</strong>
+          <span>范围：Nasdaq-100 2026-08-26 成分快照</span>
+          <span>生成方法：稳定 SHA-256 哈希</span>
+          <span>数据：<b>确定性合成演示（非真实行情）</b></span>
+          <span>版本：<b>Windows Store Read-Only</b></span>
+          <span>研究引擎：<b>Aegis Forecast</b></span>
+          <span>作者：<b>LAI ZEYU（来泽宇）</b></span>
+          <strong>Store 包不含交易或自动执行模块 · 不构成投资建议</strong>
         </footer>
       </div>
-      <SignalDrawer signal={selectedSignal} onClose={() => setSelectedSignal(null)} />
+      <SignalDrawer signal={selectedSignal} onClose={closeSignal} />
     </div>
   )
 }

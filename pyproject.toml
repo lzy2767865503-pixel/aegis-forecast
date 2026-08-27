@@ -4,22 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegis-forecast"
-version = "1.4.0"
-description = "A privacy-safe, simulation-only Nasdaq-100 technical research workstation"
+version = "1.5.0"
+description = "Quant Scenario Studio Windows Store read-only research workstation"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-  { name = "LAI ZEYU" },
+  { name = "LAI ZEYU（来泽宇）" },
 ]
-dependencies = [
-  "numpy>=2.0,<3.0",
-  "pandas>=2.2,<3.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
-moomoo = ["moomoo-api>=10.9"]
+# Non-Store experiments may install a connector manually. It is intentionally
+# absent from Store requirements, the frozen sidecar and the UI/API surface.
 dev = ["pytest>=8.0"]
+nonstore = ["numpy>=2.0,<3.0", "pandas>=2.2,<4.0"]
 
 [project.scripts]
 aegis-forecast = "aegis_quant.cli:main"

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate deterministic, synthetic artifacts for the public demo.
+"""Generate the bundled deterministic synthetic scenario.
 
-The output contains no broker, customer, credential or real portfolio data.
-It is intentionally small enough to commit and stable enough for CI.
+Every numeric value is produced from stable SHA-256 hashes. The artifacts are
+illustrative generated samples, not observations, training output, a backtest,
+or evidence of predictive performance.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import csv
 import hashlib
 import io
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +21,13 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 UNIVERSE_PATH = PROJECT_ROOT / "config" / "us_universe.json"
 OUTPUT_ROOT = PROJECT_ROOT / "demo_data"
-DEMO_DATE = "2026-07-20"
+SCENARIO_LABEL = "2026-08-26"
+SCENARIO_KIND = "DETERMINISTIC_SYNTHETIC_SCENARIO"
+LEGACY_FILENAMES = {
+    "backtest_summary.json",
+    "source_ledger.csv",
+    "walk_forward_predictions.csv",
+}
 
 
 def _fraction(token: str, salt: str) -> float:
@@ -41,136 +49,180 @@ def _universe() -> list[dict[str, Any]]:
         row
         for row in payload["securities"]
         if row.get("data_available", True)
-        and row.get("tradable", True)
+        and row.get("research_included", True)
         and str(row.get("code", "")).startswith("US.")
     ]
 
 
+def derive_scenario_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute every displayed metric from the shipped illustrative rows."""
+
+    if not rows:
+        raise ValueError("At least one illustrative scenario row is required")
+    scores = [float(row["scenario_up_score"]) for row in rows]
+    outcomes = [int(row["illustrative_outcome_up"]) for row in rows]
+    selected = [
+        (score, outcome)
+        for score, outcome, row in zip(scores, outcomes, rows)
+        if str(row["selected_scenario_case"]).lower() == "true"
+    ]
+    brier = sum((score - outcome) ** 2 for score, outcome in zip(scores, outcomes)) / len(rows)
+
+    bucket_rows: list[dict[str, Any]] = []
+    bucket_gap = 0.0
+    for lower, upper in ((0.0, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)):
+        values = [
+            (score, outcome)
+            for score, outcome in zip(scores, outcomes)
+            if lower <= score < upper
+        ]
+        if not values:
+            continue
+        mean_score = sum(item[0] for item in values) / len(values)
+        outcome_frequency = sum(item[1] for item in values) / len(values)
+        bucket_gap += abs(mean_score - outcome_frequency) * len(values) / len(rows)
+        bucket_rows.append(
+            {
+                "bucket": f"{lower:.0%}-{min(upper, 1.0):.0%}",
+                "mean_scenario_up_score": round(mean_score, 6),
+                "illustrative_up_frequency": round(outcome_frequency, 6),
+                "sample_count": len(values),
+            }
+        )
+
+    return {
+        "dataset": SCENARIO_KIND,
+        "derived_from": "illustrative_scenario_outcomes.csv",
+        "sample_count": len(rows),
+        "selected_scenario_count": len(selected),
+        "mean_scenario_up_score": round(sum(scores) / len(scores), 6),
+        "overall_illustrative_up_frequency": round(sum(outcomes) / len(outcomes), 6),
+        "selected_illustrative_up_frequency": (
+            round(sum(item[1] for item in selected) / len(selected), 6)
+            if selected
+            else None
+        ),
+        "illustrative_brier_score": round(brier, 6),
+        "illustrative_bucket_gap": round(bucket_gap, 6),
+        "buckets": bucket_rows,
+        "claim_boundary": "ILLUSTRATIVE_GENERATED_SAMPLES_ONLY",
+    }
+
+
 def build_artifacts() -> dict[str, str]:
     securities = _universe()
+    codes = [str(row["code"]) for row in securities]
+
+    outcomes: list[dict[str, Any]] = []
+    for index in range(300):
+        score = round(0.32 + 0.42 * _fraction(str(index), "scenario-up-score"), 6)
+        threshold = 0.48 + 0.10 * (score - 0.5)
+        outcome = int(_fraction(str(index), "illustrative-outcome") < threshold)
+        outcomes.append(
+            {
+                "sample_id": f"SYNTH-{index + 1:03d}",
+                "code": codes[index % len(codes)],
+                "scenario_up_score": score,
+                "illustrative_outcome_up": outcome,
+                "selected_scenario_case": str(score >= 0.56),
+                "generation_method": "stable-sha256-v1",
+            }
+        )
+    outcome_counts = Counter(str(row["code"]) for row in outcomes)
+
     ranked: list[dict[str, Any]] = []
     for row in securities:
         code = str(row["code"])
-        score = round(55.0 + 25.0 * _fraction(code, "score"), 3)
-        p_up = round(0.47 + 0.12 * _fraction(code, "p-up"), 6)
-        p_action = round(0.23 + 0.13 * _fraction(code, "p-action"), 6)
-        close = round(35.0 + 465.0 * _fraction(code, "close"), 3)
-        atr = round(max(0.5, close * (0.012 + 0.025 * _fraction(code, "atr"))), 3)
+        score = round(55.0 + 25.0 * _fraction(code, "technical-score"), 3)
+        up_score = round(0.47 + 0.12 * _fraction(code, "scenario-up-score"), 6)
+        pattern_score = round(0.23 + 0.13 * _fraction(code, "scenario-pattern-score"), 6)
+        reference = round(35.0 + 465.0 * _fraction(code, "reference-value"), 3)
+        variation = round(max(0.5, reference * (0.012 + 0.025 * _fraction(code, "variation"))), 3)
         ranked.append(
             {
-                "date": DEMO_DATE,
+                "scenario_as_of": SCENARIO_LABEL,
                 "code": code,
                 "name": row.get("name_en") or row.get("name") or code,
-                "close": close,
-                "atr14": atr,
-                "atr_pct": round(atr / close, 6),
-                "amount_ma20": round(25_000_000 + 975_000_000 * _fraction(code, "amount"), 2),
-                "market_state": "NEUTRAL",
+                "illustrative_reference_value": reference,
+                "illustrative_variation_unit": variation,
+                "illustrative_variation_ratio": round(variation / reference, 6),
+                "illustrative_activity_index": round(20 + 80 * _fraction(code, "activity-index"), 3),
+                "scenario_state": "ILLUSTRATIVE_NEUTRAL",
                 "factor_trend": round(40 + 50 * _fraction(code, "trend"), 3),
                 "factor_momentum": round(40 + 50 * _fraction(code, "momentum"), 3),
-                "factor_relative_strength": round(40 + 50 * _fraction(code, "rs"), 3),
-                "factor_volume_price": round(40 + 50 * _fraction(code, "volume"), 3),
+                "factor_relative_strength": round(40 + 50 * _fraction(code, "relative-strength"), 3),
+                "factor_volume_price": round(40 + 50 * _fraction(code, "volume-price"), 3),
                 "factor_structure": round(40 + 50 * _fraction(code, "structure"), 3),
-                "factor_risk_quality": round(40 + 50 * _fraction(code, "risk"), 3),
+                "factor_risk_quality": round(40 + 50 * _fraction(code, "risk-quality"), 3),
                 "technical_score": score,
-                "base_candidate": str(score >= 62),
-                "market_trade_allowed": "True",
-                "p_up": p_up,
-                "p_action": p_action,
-                "calibration_neighbors": 240 + int(500 * _fraction(code, "neighbors")),
-                "ranking_value": round(score / 100 * p_up * p_action, 8),
-                "selected_signal": "False",
-                "trigger_level": round(close + 0.35 * atr, 3),
-                "support_level": round(close - 0.75 * atr, 3),
-                "invalid_level": round(close - 1.6 * atr, 3),
-                "archetype": "Synthetic trend demo",
+                "rule_eligible": str(score >= 62),
+                "scenario_context_available": "True",
+                "scenario_up_score": up_score,
+                "scenario_pattern_score": pattern_score,
+                "illustrative_outcome_rows": outcome_counts[code],
+                "ranking_value": round(score / 100 * up_score * pattern_score, 8),
+                "selected_scenario_case": "False",
+                "confirmation_reference": round(reference + 0.35 * variation, 3),
+                "structural_reference": round(reference - 0.75 * variation, 3),
+                "invalidation_reference": round(reference - 1.6 * variation, 3),
+                "archetype": "Stable-hash illustrative trend scenario",
             }
         )
 
     ranked.sort(key=lambda item: float(item["ranking_value"]), reverse=True)
     for item in ranked[:5]:
-        item["p_up"] = max(float(item["p_up"]), 0.56)
-        item["p_action"] = max(float(item["p_action"]), 0.32)
-        item["base_candidate"] = "True"
-        item["selected_signal"] = "True"
+        item["scenario_up_score"] = max(float(item["scenario_up_score"]), 0.56)
+        item["scenario_pattern_score"] = max(float(item["scenario_pattern_score"]), 0.32)
+        item["rule_eligible"] = "True"
+        item["selected_scenario_case"] = "True"
         item["ranking_value"] = round(
-            float(item["technical_score"]) / 100
-            * float(item["p_up"])
-            * float(item["p_action"]),
+            float(item["technical_score"])
+            / 100
+            * float(item["scenario_up_score"])
+            * float(item["scenario_pattern_score"]),
             8,
         )
     ranked.sort(key=lambda item: float(item["ranking_value"]), reverse=True)
 
-    ledger = [
+    sample_manifest = [
         {
             "code": row["code"],
             "name": row["name"],
-            "first_date": "2021-01-04",
-            "last_date": DEMO_DATE,
-            "rows": 1395,
-            "adjustment": "synthetic",
-            "source_url": "synthetic://aegis-forecast/demo",
+            "scenario_as_of": SCENARIO_LABEL,
+            "ranking_rows": 1,
+            "illustrative_outcome_rows": outcome_counts[str(row["code"])],
+            "source_kind": "STABLE_HASH_GENERATED",
+            "generator": "scripts/generate_demo_data.py",
         }
         for row in ranked
     ]
-
-    predictions: list[dict[str, Any]] = []
-    for index in range(300):
-        probability = round(0.32 + 0.42 * _fraction(str(index), "calibration-p"), 6)
-        actual_threshold = 0.48 + 0.10 * (probability - 0.5)
-        label = int(_fraction(str(index), "calibration-label") < actual_threshold)
-        predictions.append(
-            {
-                "date": f"DEMO-{index + 1:03d}",
-                "code": ranked[index % len(ranked)]["code"],
-                "p_up": probability,
-                "label_up": label,
-                "selected_signal": str(probability >= 0.56),
-            }
-        )
-
-    summary = {
-        "dataset": "DETERMINISTIC_SYNTHETIC_DEMO",
-        "signal_count": 300,
-        "evaluated_signal_count": 300,
-        "weeks_with_signals": 60,
-        "average_names_per_signal_week": 5.0,
-        "precision_up": 0.5333,
-        "precision_lcb_95": 0.4768,
-        "precision_action": 0.31,
-        "baseline_up_rate": 0.51,
-        "lift_vs_baseline": 1.0457,
-        "average_net_return": 0.0042,
-        "median_net_return": 0.0031,
-        "average_excess_return": 0.0038,
-        "profit_factor": 1.18,
-        "signal_basket_max_drawdown": -0.142,
-        "brier_score": 0.251,
-        "ece_5bin": 0.072,
-        "average_threshold": 62.0,
-    }
+    metrics = derive_scenario_metrics(outcomes)
     manifest = {
-        "kind": "DETERMINISTIC_SYNTHETIC_DEMO",
+        "kind": SCENARIO_KIND,
         "containsBrokerData": False,
         "containsPersonalData": False,
         "containsCredentials": False,
-        "asOfLabel": DEMO_DATE,
+        "containsMarketObservations": False,
+        "containsTrainingOutput": False,
+        "asOfLabel": SCENARIO_LABEL,
         "securityCount": len(ranked),
+        "illustrativeOutcomeSamples": len(outcomes),
         "description": (
-            "Generated locally from the public universe symbols using stable hashes. "
-            "Values are illustrative and are not market observations."
+            "Generated locally from public universe symbols using stable SHA-256 hashes. "
+            "Every numeric value is illustrative and is not a market observation, model "
+            "training result, backtest, or performance claim."
         ),
     }
 
     ranking_fields = [
-        "date",
+        "scenario_as_of",
         "code",
         "name",
-        "close",
-        "atr14",
-        "atr_pct",
-        "amount_ma20",
-        "market_state",
+        "illustrative_reference_value",
+        "illustrative_variation_unit",
+        "illustrative_variation_ratio",
+        "illustrative_activity_index",
+        "scenario_state",
         "factor_trend",
         "factor_momentum",
         "factor_relative_strength",
@@ -178,38 +230,45 @@ def build_artifacts() -> dict[str, str]:
         "factor_structure",
         "factor_risk_quality",
         "technical_score",
-        "base_candidate",
-        "market_trade_allowed",
-        "p_up",
-        "p_action",
-        "calibration_neighbors",
+        "rule_eligible",
+        "scenario_context_available",
+        "scenario_up_score",
+        "scenario_pattern_score",
+        "illustrative_outcome_rows",
         "ranking_value",
-        "selected_signal",
-        "trigger_level",
-        "support_level",
-        "invalid_level",
+        "selected_scenario_case",
+        "confirmation_reference",
+        "structural_reference",
+        "invalidation_reference",
         "archetype",
     ]
     return {
         "latest_rankings.csv": _csv_text(ranked, ranking_fields),
-        "source_ledger.csv": _csv_text(
-            ledger,
+        "illustrative_sample_manifest.csv": _csv_text(
+            sample_manifest,
             [
                 "code",
                 "name",
-                "first_date",
-                "last_date",
-                "rows",
-                "adjustment",
-                "source_url",
+                "scenario_as_of",
+                "ranking_rows",
+                "illustrative_outcome_rows",
+                "source_kind",
+                "generator",
             ],
         ),
-        "walk_forward_predictions.csv": _csv_text(
-            predictions,
-            ["date", "code", "p_up", "label_up", "selected_signal"],
+        "illustrative_scenario_outcomes.csv": _csv_text(
+            outcomes,
+            [
+                "sample_id",
+                "code",
+                "scenario_up_score",
+                "illustrative_outcome_up",
+                "selected_scenario_case",
+                "generation_method",
+            ],
         ),
-        "backtest_summary.json": json.dumps(
-            summary, ensure_ascii=False, indent=2, sort_keys=True
+        "scenario_metrics.json": json.dumps(
+            metrics, ensure_ascii=False, indent=2, sort_keys=True
         )
         + "\n",
         "demo_manifest.json": json.dumps(
@@ -224,10 +283,11 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Fail when committed demo artifacts are missing or stale.",
+        help="Fail when committed scenario artifacts are missing, stale, or legacy-named.",
     )
     args = parser.parse_args()
     expected = build_artifacts()
+    legacy = sorted(name for name in LEGACY_FILENAMES if (OUTPUT_ROOT / name).exists())
     if args.check:
         stale = [
             name
@@ -235,15 +295,23 @@ def main() -> None:
             if not (OUTPUT_ROOT / name).exists()
             or (OUTPUT_ROOT / name).read_text(encoding="utf-8") != content
         ]
+        if legacy:
+            stale.extend(legacy)
         if stale:
-            raise SystemExit(f"Demo artifacts are missing or stale: {', '.join(stale)}")
-        print(f"Demo artifacts verified: {len(expected)} files")
+            raise SystemExit(
+                f"Scenario artifacts are missing, stale, or legacy-named: {', '.join(stale)}"
+            )
+        print(f"Deterministic synthetic scenario verified: {len(expected)} files")
         return
 
+    if legacy:
+        raise SystemExit(
+            "Remove legacy artifact names before generation: " + ", ".join(legacy)
+        )
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     for name, content in expected.items():
-        (OUTPUT_ROOT / name).write_text(content, encoding="utf-8", newline="")
-    print(f"Generated {len(expected)} deterministic demo artifacts in {OUTPUT_ROOT}")
+        (OUTPUT_ROOT / name).write_text(content, encoding="utf-8")
+    print(f"Generated {len(expected)} deterministic synthetic scenario artifacts in {OUTPUT_ROOT}")
 
 
 if __name__ == "__main__":

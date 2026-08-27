@@ -1,24 +1,31 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
+import threading
 import unittest
-from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+from http.client import HTTPConnection
 from pathlib import Path
-from unittest.mock import patch
-
 from aegis_quant.audit import AuditLedger
 from aegis_quant.autonomy import AutonomyMonitor
 from aegis_quant.environment import load_project_env
-from aegis_quant.learning import LearningRegistry
-from aegis_quant.moomoo_gateway import GatewayConfig, MoomooSimulationGateway
+from aegis_quant.integrity import ScenarioIntegrityRegistry
 from aegis_quant.nasdaq100_universe import load_universe_config
-from aegis_quant.pnl_ledger import PnLLedger
-from aegis_quant.server import simulation_execution_enabled
-from aegis_quant.service import DATA_MODE, DEMO_MODEL_ROOT
-from aegis_quant.t_trader import SimulationTTrader
+from aegis_quant.paths import DATA_ROOT_MARKER, clear_local_data, ensure_directories
+from aegis_quant.privacy import PrivacyPreferences
+from aegis_quant.server import (
+    MAX_BODY_BYTES,
+    AegisHandler,
+    AegisHTTPServer,
+    _process_is_alive,
+    simulation_execution_enabled,
+)
+from aegis_quant.service import AegisService, DATA_MODE, DEMO_MODEL_ROOT, derive_scenario_metrics
 
 
 class UniverseTests(unittest.TestCase):
@@ -30,30 +37,53 @@ class UniverseTests(unittest.TestCase):
         self.assertEqual(len(codes), len(set(codes)))
         self.assertTrue(all(code.startswith("US.") for code in codes))
         self.assertEqual(config["index"], "NASDAQ-100")
+        self.assertEqual(config["snapshot_date"], "2026-08-26")
+        self.assertEqual(config["constituent_as_of"], "Aug 26, 2026")
+        self.assertEqual(len(codes), 102)
+        self.assertIn("US.SPCX", codes)
+        self.assertNotIn("US.EA", codes)
 
-    def test_aggressive_profile_keeps_directional_and_position_guards(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "config" / "model_config.json"
+    def test_store_profile_is_neutral_research_snapshot(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "config" / "store_model_config.json"
         config = json.loads(path.read_text(encoding="utf-8"))
         gates = config["gates"]
-        self.assertEqual(config["strategy_profile"], "AGGRESSIVE_SIMULATION")
-        self.assertLess(float(gates["minimum_p_up"]), 0.60)
+        self.assertEqual(config["strategy_profile"], "TECHNICAL_RESEARCH_SNAPSHOT")
+        self.assertLess(float(gates["minimum_scenario_up_score"]), 0.60)
         self.assertTrue(gates["require_trend_confirmation"])
         self.assertTrue(gates["require_relative_strength_confirmation"])
         self.assertLessEqual(int(gates["maximum_names"]), 5)
         self.assertLessEqual(
-            int(config["validation"]["maximum_score_threshold"]),
+            int(config["integrity"]["maximum_score_threshold"]),
             int(gates["default_score_threshold"]),
         )
+        serialized = json.dumps(config).lower()
+        for token in ("holding", "position", "take_profit", "stop_loss", "t_trading"):
+            self.assertNotIn(token, serialized)
 
     def test_bundled_artifacts_are_synthetic_and_cover_the_demo_universe(self) -> None:
         manifest = json.loads(
             (DEMO_MODEL_ROOT / "demo_manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(DATA_MODE, "DEMO")
-        self.assertEqual(manifest["kind"], "DETERMINISTIC_SYNTHETIC_DEMO")
+        self.assertEqual(DATA_MODE, "DETERMINISTIC_SYNTHETIC_SCENARIO")
+        self.assertEqual(manifest["kind"], "DETERMINISTIC_SYNTHETIC_SCENARIO")
         self.assertFalse(manifest["containsBrokerData"])
         self.assertFalse(manifest["containsPersonalData"])
+        self.assertFalse(manifest["containsMarketObservations"])
+        self.assertFalse(manifest["containsTrainingOutput"])
         self.assertGreaterEqual(int(manifest["securityCount"]), 90)
+
+    def test_all_scenario_metrics_are_recomputed_from_shipped_rows(self) -> None:
+        with (DEMO_MODEL_ROOT / "illustrative_scenario_outcomes.csv").open(
+            "r", encoding="utf-8", newline=""
+        ) as handle:
+            rows = list(csv.DictReader(handle))
+        derived = derive_scenario_metrics(rows)
+        shipped = json.loads(
+            (DEMO_MODEL_ROOT / "scenario_metrics.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(rows), 300)
+        self.assertEqual(derived, shipped)
+        self.assertEqual(sum(bucket["sample_count"] for bucket in derived["buckets"]), 300)
 
 
 class AuditAndRuntimeTests(unittest.TestCase):
@@ -75,17 +105,21 @@ class AuditAndRuntimeTests(unittest.TestCase):
             )
         self.assertFalse(ledger.verify()["valid"])
 
-    def test_simulation_execution_is_opt_in(self) -> None:
+    def test_store_simulation_execution_cannot_be_enabled_by_environment(self) -> None:
         previous = os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
         try:
             self.assertFalse(simulation_execution_enabled())
             os.environ["AEGIS_ENABLE_SIMULATION_EXECUTION"] = "1"
-            self.assertTrue(simulation_execution_enabled())
+            self.assertFalse(simulation_execution_enabled())
         finally:
             if previous is None:
                 os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
             else:
                 os.environ["AEGIS_ENABLE_SIMULATION_EXECUTION"] = previous
+
+    def test_parent_process_probe_is_read_only_and_detects_current_process(self) -> None:
+        self.assertTrue(_process_is_alive(os.getpid()))
+        self.assertFalse(_process_is_alive(2_147_483_647))
 
     def test_dotenv_loader_is_safe_and_preserves_exported_values(self) -> None:
         preserved_key = "AEGIS_TEST_PRESERVED"
@@ -129,246 +163,486 @@ class AuditAndRuntimeTests(unittest.TestCase):
     def test_autonomy_heartbeat_is_persisted_without_a_browser(self) -> None:
         state_path = Path(self.tempdir.name) / "autonomy.json"
         monitor = AutonomyMonitor(state_path)
-        monitor.record_tick({"action": "SKIP", "reason": "NO_STOCK_IN_T_BUY_ZONE"})
         snapshot = monitor.snapshot()
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertTrue(snapshot["healthy"])
-        self.assertEqual(snapshot["lastDecision"], "NO_STOCK_IN_T_BUY_ZONE")
-        self.assertEqual(snapshot["schedulerTicksProcess"], 1)
-        self.assertEqual(persisted["schedulerTicksLifetime"], 1)
+        self.assertFalse(snapshot["schedulerRegistered"])
+        self.assertFalse(snapshot["executionRegistered"])
+        self.assertEqual(persisted["launchCount"], 1)
 
-        previous_decision = snapshot["lastDecisionAt"]
         monitor.record_heartbeat()
         heartbeat = monitor.snapshot()
-        self.assertEqual(heartbeat["lastDecisionAt"], previous_decision)
         self.assertTrue(heartbeat["healthy"])
         self.assertFalse(snapshot["independence"]["requiresCodex"])
-        self.assertTrue(snapshot["independence"]["requiresMacAwake"])
+        self.assertTrue(snapshot["independence"]["requiresWindowsAwake"])
+        self.assertNotIn("requiresOpenD", snapshot["independence"])
+        self.assertEqual(snapshot["schedulerIntervalSeconds"], 0)
 
-    def test_pnl_ledger_rolls_daily_weekly_monthly_and_yearly_profit(self) -> None:
-        ledger = PnLLedger(self.database)
+    def test_privacy_preferences_store_only_research_notice(self) -> None:
+        path = Path(self.tempdir.name) / "settings" / "privacy.json"
+        preferences = PrivacyPreferences(path)
+        self.assertEqual(
+            set(preferences.status()),
+            {"researchNoticeAccepted", "policyVersion", "updatedAt"},
+        )
+        updated = preferences.update({"researchNoticeAccepted": True})
+        self.assertTrue(updated["researchNoticeAccepted"])
+        with self.assertRaises(ValueError):
+            preferences.update({"brokerDataConsent": True})
 
-        def account(total_assets: float, today_pnl: float) -> dict:
-            return {
-                "connected": True,
-                "funds": {
-                    "totalAssets": total_assets,
-                    "cash": 500,
-                    "marketValue": total_assets - 500,
-                    "todayPnl": today_pnl,
-                },
-            }
+    def test_local_data_delete_preserves_unrelated_sentinels(self) -> None:
+        root = Path(self.tempdir.name) / "LocalState"
+        binding = "TEST:local-data-delete-unit"
+        ensure_directories(root, binding=binding)
+        (root / "runtime" / "engine_state.json").write_text("{}", encoding="utf-8")
+        (root / "operational.db").write_bytes(b"app-owned")
+        (root / "keep-me.txt").write_text("sentinel", encoding="utf-8")
+        (root / "unrelated-project").mkdir()
+        (root / "unrelated-project" / "data.txt").write_text("keep", encoding="utf-8")
 
-        first = datetime(2026, 7, 20, 16, 0, tzinfo=timezone.utc)
-        second = datetime(2026, 7, 21, 16, 0, tzinfo=timezone.utc)
-        ledger.record(account(101_000, 1_000), captured_at=first, minimum_interval_seconds=0)
-        ledger.record(account(101_500, 500), captured_at=second, minimum_interval_seconds=0)
-        history = ledger.history(as_of=second)
+        result = clear_local_data(root, binding=binding)
 
-        self.assertEqual(history["periods"]["day"]["profit"], 500.0)
-        self.assertEqual(history["periods"]["week"]["profit"], 1_500.0)
-        self.assertEqual(history["periods"]["month"]["profit"], 1_500.0)
-        self.assertEqual(history["periods"]["year"]["profit"], 1_500.0)
-        self.assertEqual(history["snapshotCount"], 2)
-        self.assertEqual(history["daily"][0]["date"], "2026-07-21")
+        self.assertIn("runtime", result["removed"])
+        self.assertIn("operational.db", result["removed"])
+        self.assertEqual((root / "keep-me.txt").read_text(encoding="utf-8"), "sentinel")
+        self.assertEqual(
+            (root / "unrelated-project" / "data.txt").read_text(encoding="utf-8"),
+            "keep",
+        )
+        self.assertTrue((root / "runtime").is_dir())
+        self.assertTrue((root / DATA_ROOT_MARKER).is_file())
+
+    def test_local_data_delete_refuses_an_unbound_root(self) -> None:
+        root = Path(self.tempdir.name) / "unbound"
+        (root / "runtime").mkdir(parents=True)
+        with self.assertRaises(RuntimeError):
+            clear_local_data(root, binding="TEST:unbound-unit")
 
 
-class LearningTests(unittest.TestCase):
-    def test_learning_cycle_cannot_promote_itself(self) -> None:
+class IntegrityTests(unittest.TestCase):
+    def test_local_integrity_check_cannot_train_or_replace_models(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
-            database = Path(tempdir) / "learning.db"
-            registry = LearningRegistry(database)
+            database = Path(tempdir) / "integrity.db"
+            registry = ScenarioIntegrityRegistry(database)
             result = registry.run_cycle()
-            self.assertFalse(result["promotionGate"]["eligible"])
-            self.assertFalse(result["promotionGate"]["liveAutoPromotion"])
+            self.assertEqual(result["lastCheck"]["status"], "ILLUSTRATIVE_FILES_VERIFIED")
+            self.assertFalse(result["replacementPolicy"]["trainsModels"])
+            self.assertFalse(result["replacementPolicy"]["comparesModels"])
+            self.assertFalse(result["replacementPolicy"]["automaticReplacement"])
 
-class MoomooSimulationBoundaryTests(unittest.TestCase):
-    def test_real_environment_is_permanently_rejected(self) -> None:
-        with self.assertRaises(PermissionError):
-            MoomooSimulationGateway.assert_simulation_environment("REAL")
+class StorePackageBoundaryTests(unittest.TestCase):
+    def test_store_spec_excludes_account_and_execution_modules(self) -> None:
+        spec = (
+            Path(__file__).resolve().parents[1]
+            / "packaging"
+            / "windows"
+            / "aegis_backend.spec"
+        ).read_text(encoding="utf-8")
+        for name in (
+            "moomoo",
+            "futu",
+            "aegis_quant.moomoo_gateway",
+            "aegis_quant.pnl_ledger",
+            "aegis_quant.t_trader",
+            "aegis_quant.us_pipeline",
+        ):
+            self.assertIn(f'"{name}"', spec)
+        self.assertIn("store_model_config.json", spec)
+        self.assertNotIn('project_root / "config" / "model_config.json"', spec)
+        self.assertNotIn("collect_data_files", spec)
 
-    def test_fixed_us_whitelist_is_enforced_before_broker_access(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            ledger = AuditLedger(Path(tempdir) / "moomoo.db")
-            gateway = MoomooSimulationGateway(
-                allowed_codes={"US.AAPL"},
-                config=GatewayConfig(host="127.0.0.1", port=9),
-                audit=ledger,
+    def test_store_candidate_has_only_neutral_read_only_configuration(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        self.assertFalse((root / "config" / "t_trading.json").exists())
+        system = json.loads((root / "config" / "system.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            system["capability_boundary"],
+            {
+                "read_only_research": True,
+                "external_connections": False,
+                "background_tasks": False,
+            },
+        )
+        system_text = json.dumps(system).lower()
+        for token in ("broker", "account", "order", "position", "t_trading"):
+            self.assertNotIn(token, system_text)
+
+    def test_windows_workflow_keeps_candidate_bytes_private_and_sequential(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/windows-store.yml").read_text(encoding="utf-8")
+        self.assertEqual(
+            workflow.count("runs-on: [self-hosted, windows, x64, wack-interactive]"), 1
+        )
+        self.assertNotIn("matrix:", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("python-version: 3.13.14", workflow)
+        self.assertIn("Native QA round 1", workflow)
+        self.assertIn("Native QA round 2", workflow)
+        self.assertEqual(workflow.count("Strict WACK round"), 2)
+        self.assertEqual(workflow.count("-WackRound"), 2)
+        self.assertIn("prepare-store-handoff.ps1", workflow)
+        self.assertNotIn("actions/upload-artifact", workflow)
+        self.assertIn("retain-private-store-handoff.ps1", workflow)
+        self.assertIn("AEGIS_PRIVATE_STORE_HANDOFF_ROOT", workflow)
+        self.assertNotIn(
+            "artifacts/store-handoff/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix",
+            workflow,
+        )
+        self.assertIn('AEGIS_MAIN_RULESET_ID: "21633557"', workflow)
+        self.assertIn("AEGIS_STORE_IDENTITY_NAME", workflow)
+        self.assertIn("AEGIS_STORE_PRODUCT_ID: 9NWTH4KJX5GW", workflow)
+        self.assertIn("AEGIS_STORE_IDENTITY_NAME: ${{ vars.AEGIS_STORE_IDENTITY_NAME }}", workflow)
+        self.assertIn("AEGIS_EXPECTED_STORE_IDENTITY_NAME: LAIZEYU.QuantScenarioStudiobyLAIZEYU", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("  push:", workflow)
+        self.assertIn("github.actor == 'lzy2767865503-pixel'", workflow)
+        self.assertIn("github.triggering_actor == 'lzy2767865503-pixel'", workflow)
+        self.assertIn("GITHUB_TRIGGERING_ACTOR", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("AEGIS_APPROVED_WACK_FILE_VERSION", workflow)
+        self.assertLess(
+            workflow.index("Require trusted main, reserved Partner identity"),
+            workflow.index("actions/setup-python@"),
+        )
+        runner_policy = (root / "scripts/windows/wack-runner-policy.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[Environment]::UserInteractive", runner_policy)
+        self.assertIn("WindowsBuiltInRole]::Administrator", runner_policy)
+        manifest_root = ET.parse(
+            root / "desktop/windows/AegisForecast/Package.appxmanifest"
+        ).getroot()
+        ns = {"m": "http://schemas.microsoft.com/appx/manifest/foundation/windows10"}
+        identity = manifest_root.find("m:Identity", ns)
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity.attrib["Name"], "LAIZEYU.QuantScenarioStudiobyLAIZEYU")
+        self.assertEqual(
+            identity.attrib["Publisher"],
+            "CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8",
+        )
+        self.assertEqual(
+            manifest_root.findtext("m:Properties/m:PublisherDisplayName", namespaces=ns),
+            "LAI ZEYU",
+        )
+        release = (root / ".github/workflows/windows-github-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            release,
+        )
+        self.assertIn(
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+            release,
+        )
+        self.assertNotIn(".msix", release.lower())
+        self.assertEqual(release.count("Signed same-byte portable lifecycle round"), 2)
+        self.assertIn("setup-esigner-cka.ps1", release)
+        self.assertIn("persist-credentials: false", release)
+        self.assertIn("permissions:\n  contents: read", release)
+        self.assertIn("sign-and-test:", release)
+        self.assertIn("publish-release:", release)
+        publisher = release.split("  publish-release:", 1)[1]
+        self.assertNotIn("actions/checkout", publisher)
+        self.assertIn("contents: write", publisher)
+        self.assertIn("${{ github.token }}", release)
+        self.assertNotIn("secrets.AEGIS_GITHUB_RELEASE_TOKEN", release)
+        self.assertIn("<!-- aegis-publisher:${{ github.run_id }}:${{ github.run_attempt }} -->", release)
+        self.assertIn('"$ApiBase/releases/$OwnedReleaseId"', release)
+        self.assertIn("Restore-OwnedReleaseToPrivateDraft", release)
+        self.assertIn("Exact-ID rollback immutable ownership proof failed", release)
+        self.assertIn("OwnedReleaseNodeId", release)
+        self.assertIn("Exact-ID asset upload", release)
+        self.assertIn("-Phase 'postpublish'", release)
+        self.assertIn("PE must have exactly one primary signer", publisher)
+        self.assertIn("SHA-256/RFC3161 signature index 0", publisher)
+        self.assertIn("1.3.6.1.5.5.7.3.8", publisher)
+        self.assertIn('AEGIS_MAIN_RULESET_ID: "21633557"', release)
+        self.assertIn("github.triggering_actor == 'lzy2767865503-pixel'", release)
+        self.assertIn("GITHUB_TRIGGERING_ACTOR", release)
+        self.assertIn("github.ref == 'refs/heads/main'", release)
+        self.assertIn("Assert-TagOnProtectedMain", publisher)
+        self.assertIn("Assert-RemoteAssets", publisher)
+
+    def test_windows_scripts_fail_closed_and_embed_source_hash_once(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        policy_result = subprocess.run(
+            ["pwsh", "-NoLogo", "-NoProfile", "-File", "scripts/windows/policy-selftest.ps1"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(policy_result.returncode, 0, policy_result.stdout + policy_result.stderr)
+        self.assertIn("Behavioral policy self-test passed", policy_result.stdout)
+        build = (root / "scripts/windows/build-msix.ps1").read_text(encoding="utf-8")
+        self.assertIn('"-p:InformationalVersion=1.5.0+$SourceCommit"', build)
+        self.assertIn('"-p:IncludeSourceRevisionInInformationalVersion=false"', build)
+        self.assertIn('"LAIZEYU.QuantScenarioStudiobyLAIZEYU"', build)
+        self.assertNotIn("__PARTNER_CENTER_IDENTITY_NAME__", build)
+        self.assertIn("A5F91D0A-30C6-48EE-944F-B767FA872BE8", build)
+        native = (root / "scripts/windows/verify-native.ps1").read_text(encoding="utf-8")
+        self.assertIn("Fail-closed: a package with the candidate identity already exists", native)
+        self.assertIn("sidecarExitedViaParentWatchdog", native)
+        self.assertIn("packagedBackendHashManifestVerified", native)
+        self.assertIn("-BackendRootPath (Join-Path $UnpackRoot", native)
+        self.assertLess(native.index("DOM readiness nonce"), native.index('$OwnedProcesses["$ShellProcessId|'))
+        self.assertIn("creationTimeUtcTicks", native)
+        self.assertIn("Capture-NativeOwnedObjects", native)
+        self.assertIn("Native QA verification/cleanup failures", native)
+        self.assertNotIn('| Remove-AppxPackage', native)
+        self.assertNotIn('| Stop-Process', native)
+        wack = (root / "scripts/windows/verify-wack.ps1").read_text(encoding="utf-8")
+        self.assertIn("powershell-transcript.log", wack)
+        self.assertIn('Assert-CandidateBytes "completion"', wack)
+        self.assertIn("Invoke-BoundedAppCert", wack)
+        self.assertIn("Assert-AppCertTreeExited", wack)
+        self.assertIn("Test-PathWithin $ProcessPath $PackageRecord.installLocation", wack)
+        self.assertIn("Capture-WackReportOwnedLocation", wack)
+        self.assertIn("CreatedAppCertRoots", wack)
+        self.assertIn("Register-FreshAppCertRoot", wack)
+        self.assertIn("approved AppCert executable is already running", wack)
+        self.assertIn("creationTimeUtcTicks", wack)
+        self.assertIn("WACK verification/cleanup failures", wack)
+        self.assertNotIn("Preflight proved that none", wack)
+        cka_setup = (root / "scripts/windows/setup-esigner-cka.ps1").read_text(
+            encoding="utf-8"
+        )
+        cka_cleanup = (root / "scripts/windows/cleanup-esigner-cka.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ownedSignerThumbprints", cka_setup)
+        self.assertIn("PreexistingMySet", cka_setup)
+        self.assertIn("SSL.com CKA helper process tree remained", cka_setup)
+        self.assertIn("ownedSignerThumbprints", cka_cleanup)
+        self.assertIn("Remove-Item -LiteralPath $CertificatePath", cka_cleanup)
+        self.assertIn('"unins000.exe"', cka_setup)
+        self.assertIn("SSL.com CKA uninstaller", cka_cleanup)
+        portable_lifecycle = (
+            root / "scripts/windows/verify-github-portable-lifecycle.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("DataRootCreationAttempted", portable_lifecycle)
+        archive_builder = (
+            root / "scripts/windows/new-github-portable-archive.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("archive and checksum must not preexist", archive_builder)
+        signature_policy = (root / "scripts/windows/verify-github-signatures.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("1.3.6.1.5.5.7.3.8", signature_policy)
+        self.assertIn("exactly one SHA-256/RFC3161", signature_policy)
+        trusted_sdk = (root / "scripts/windows/trusted-windows-sdk-tool.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Microsoft Corporation", trusted_sdk)
+        self.assertIn("RevocationMode", trusted_sdk)
+        self.assertIn("FileVersionRaw", trusted_sdk)
+        equivalence = (root / "scripts/windows/msix-payload-equivalence.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("payloadTreeSha256", equivalence)
+        self.assertIn("AppxSignature.p7x", equivalence)
+        handoff = (root / "scripts/windows/prepare-store-handoff.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("UNSIGNED_FOR_PARTNER_CENTER", handoff)
+        self.assertIn("LOCAL_FIXED_NTFS_EXACT_ACL_PENDING_RETENTION", handoff)
+        retention = (root / "scripts/windows/retain-private-store-handoff.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("LOCAL_FIXED_NTFS_EXACT_ACL", retention)
+        self.assertIn("S-1-5-18", retention)
+        self.assertIn("S-1-5-32-544", retention)
+        self.assertIn("githubArtifactUploaded = $false", retention)
+        self.assertIn('($RunLeaf + ".incomplete")', retention)
+        self.assertIn("[IO.Directory]::Move($IncompleteRoot, $RunRoot)", retention)
+        self.assertIn("retainedFiles = @($RetainedFileRows)", retention)
+        backend_hashes = (root / "scripts/windows/backend-hashes.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("treeSha256", backend_hashes)
+        self.assertIn("duplicate path", backend_hashes)
+        lock = (root / "requirements-windows-build.lock.txt").read_text(encoding="utf-8")
+        self.assertIn("--hash=sha256:", lock)
+        self.assertIn("pip==26.2.1", lock)
+
+    def test_store_service_is_fixed_to_bundled_synthetic_artifacts(self) -> None:
+        previous = os.environ.get("AEGIS_MODEL_ROOT")
+        try:
+            os.environ["AEGIS_MODEL_ROOT"] = str(Path.cwd())
+            self.assertEqual(DATA_MODE, "DETERMINISTIC_SYNTHETIC_SCENARIO")
+            service_system = AegisService().status()["system"]
+            self.assertEqual(service_system["offlineOnly"], True)
+            for key in (
+                "accountConnectorPackaged",
+                "canPlaceOrders",
+                "canPlaceSimulationOrders",
+                "liveTradingAllowed",
+            ):
+                self.assertNotIn(key, service_system)
+        finally:
+            if previous is None:
+                os.environ.pop("AEGIS_MODEL_ROOT", None)
+            else:
+                os.environ["AEGIS_MODEL_ROOT"] = previous
+
+
+class LocalAPISecurityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.session_token = "s" * 48
+        cls.csrf_token = "c" * 48
+        AegisHandler.session_token = cls.session_token
+        AegisHandler.csrf_token = cls.csrf_token
+        AegisHandler.service = AegisService()
+        cls.server = AegisHTTPServer(("127.0.0.1", 0), AegisHandler)
+        cls.port = int(cls.server.server_address[1])
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=2)
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], dict]:
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        result = response.status, {key: value for key, value in response.getheaders()}, payload
+        connection.close()
+        return result
+
+    def authenticated_headers(self, *, post: bool = False) -> dict[str, str]:
+        headers = {"X-Aegis-Session": self.session_token}
+        if post:
+            headers.update(
+                {
+                    "X-Aegis-CSRF": self.csrf_token,
+                    "Content-Type": "application/json",
+                }
             )
-            with self.assertRaises(ValueError):
-                gateway.submit_order(
-                    {"environment": "SIMULATE", "code": "US.IBM", "side": "BUY", "quantity": 1, "price": 1}
+        return headers
+
+    def test_api_requires_session_and_sends_security_headers(self) -> None:
+        status, headers, _ = self.request("GET", "/api/health")
+        self.assertEqual(status, 401)
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+
+    def test_core_readiness_apis_return_real_scenario_data(self) -> None:
+        for path in ("/api/health", "/api/status", "/api/signals?limit=1", "/api/universe?limit=1", "/api/data"):
+            status, _, payload = self.request("GET", path, headers=self.authenticated_headers())
+            self.assertEqual(status, 200, path)
+            if path == "/api/health":
+                self.assertTrue(payload["ok"])
+                self.assertTrue(payload["storeReadOnly"])
+                self.assertFalse(payload["executionEnabled"])
+                self.assertEqual(payload["mode"], "DETERMINISTIC_SYNTHETIC_SCENARIO")
+            elif path == "/api/status":
+                self.assertEqual(payload["system"]["dataMode"], "DETERMINISTIC_SYNTHETIC_SCENARIO")
+            elif path.startswith("/api/signals"):
+                self.assertEqual(len(payload["items"]), 1)
+            elif path.startswith("/api/universe"):
+                self.assertEqual(len(payload["items"]), 1)
+            elif path == "/api/data":
+                self.assertEqual(payload["coverage"]["illustrativeOutcomeRows"], 300)
+
+    def test_scenario_integrity_routes_replace_legacy_prediction_routes(self) -> None:
+        status, _, payload = self.request("GET", "/api/integrity", headers=self.authenticated_headers())
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["replacementPolicy"]["trainsModels"])
+        for path in ("/api/predictions/refresh", "/api/learning", "/api/learning/run"):
+            method = "POST" if path.endswith("run") or path.endswith("refresh") else "GET"
+            status, _, _ = self.request(
+                method,
+                path,
+                body=b"{}" if method == "POST" else None,
+                headers=self.authenticated_headers(post=method == "POST"),
+            )
+            self.assertEqual(status, 404, path)
+
+    def test_invalid_host_and_cross_origin_are_rejected(self) -> None:
+        status, _, _ = self.request(
+            "GET", "/api/health", headers={"Host": "evil.example"}
+        )
+        self.assertEqual(status, 421)
+        status, _, _ = self.request(
+            "GET", "/api/health", headers={"Host": "127.0.0.1:9"}
+        )
+        self.assertEqual(status, 421)
+        status, _, _ = self.request(
+            "GET",
+            "/api/health",
+            headers={**self.authenticated_headers(), "Origin": "https://evil.example"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_all_order_and_t_trader_routes_are_forbidden(self) -> None:
+        paths = (
+            "/api/moomoo/orders",
+            "/api/moomoo/t-trading",
+            "/api/t-trader/tick",
+            "/api/scheduler/start",
+            "/api/example/orders",
+            "/api/moomoo/cancel-order",
+            "/api/moomoo/modify_order",
+            "/api/execution/start",
+        )
+        for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+            for path in paths:
+                status, _, payload = self.request(
+                    method,
+                    path,
+                    body=None if method == "GET" else b"{}",
+                    headers=(
+                        self.authenticated_headers()
+                        if method == "GET"
+                        else self.authenticated_headers(post=True)
+                    ),
                 )
+                self.assertEqual(status, 403, f"{method} {path}")
+                self.assertTrue(payload["storeReadOnly"])
 
-    def test_gateway_whitelist_can_follow_index_reconstitution(self) -> None:
-        gateway = MoomooSimulationGateway(allowed_codes={"US.AAPL"})
-        gateway.set_allowed_codes({"US.AAPL", "US.NVDA", "US.META"})
-        self.assertEqual(gateway.allowed_codes, {"US.AAPL", "US.NVDA", "US.META"})
+    def test_account_connector_and_financial_history_routes_do_not_exist(self) -> None:
+        for path in (
+            "/api/moomoo/status",
+            "/api/moomoo/account",
+            "/api/pnl/history",
+        ):
+            status, _, payload = self.request(
+                "GET", path, headers=self.authenticated_headers()
+            )
+            self.assertEqual(status, 404, path)
+            self.assertEqual(payload["error"], "not found")
 
-    def test_moomoo_market_authorization_formats_are_normalized(self) -> None:
-        self.assertTrue(MoomooSimulationGateway._has_us_authorization(["US", "HK"]))
-        self.assertTrue(MoomooSimulationGateway._has_us_authorization("['US']"))
-        self.assertTrue(MoomooSimulationGateway._has_us_authorization("TrdMarket.US"))
-        self.assertFalse(MoomooSimulationGateway._has_us_authorization(["HK", "MY"]))
-
-    def test_order_statistics_are_derived_from_broker_order_fields(self) -> None:
-        statistics = MoomooSimulationGateway._order_statistics(
-            [
-                {"trd_side": "BUY", "order_status": "FILLED_ALL", "qty": 1, "dealt_qty": 1, "dealt_avg_price": 100},
-                {"trd_side": "SELL", "order_status": "CANCELLED_ALL", "qty": 1, "dealt_qty": 0, "dealt_avg_price": 0},
-            ]
+    def test_post_requires_csrf_and_enforces_body_limit(self) -> None:
+        status, _, _ = self.request(
+            "POST",
+            "/api/privacy",
+            body=b"{}",
+            headers={"X-Aegis-Session": self.session_token, "Content-Type": "application/json"},
         )
-        self.assertEqual(statistics["submittedOrders"], 2)
-        self.assertEqual(statistics["filledOrders"], 1)
-        self.assertEqual(statistics["cancelledOrRejectedOrders"], 1)
-        self.assertEqual(statistics["turnover"], 100.0)
-
-    def test_t_trader_tracks_only_its_own_filled_round_trip_inventory(self) -> None:
-        code, quantity = SimulationTTrader._automation_position(
-            [
-                {"code": "US.AAPL", "side": "SELL", "dealtQuantity": 1},
-                {"code": "US.AAPL", "side": "BUY", "dealtQuantity": 2},
-            ]
+        self.assertEqual(status, 403)
+        status, _, _ = self.request(
+            "POST",
+            "/api/privacy",
+            body=b"x" * (MAX_BODY_BYTES + 1),
+            headers=self.authenticated_headers(post=True),
         )
-        self.assertEqual(code, "US.AAPL")
-        self.assertEqual(quantity, 1)
-
-    def test_t_trader_only_buys_selected_stock_inside_its_atr_zone(self) -> None:
-        class Gateway:
-            allowed_codes = {"US.CSX", "US.MSFT"}
-
-            @staticmethod
-            def quote_snapshot(codes):
-                prices = {"US.CSX": 49.5, "US.MSFT": 100.0}
-                return [
-                    {
-                        "code": code,
-                        "lastPrice": prices[code],
-                        "averagePrice": prices[code],
-                        "previousClose": prices[code],
-                        "suspended": False,
-                    }
-                    for code in codes
-                ]
-
-        candidates = [
-            {
-                "code": "US.CSX", "selected": True, "technicalScore": 70,
-                "probabilityUp": 0.56,
-                "tStrategy": {"enabled": True, "buyAtOrBelow": 50, "hardStop": 48},
-            },
-            {
-                "code": "US.MSFT", "selected": False, "technicalScore": 90,
-                "probabilityUp": 0.70,
-                "tStrategy": {"enabled": False, "buyAtOrBelow": 101, "hardStop": 95},
-            },
-        ]
-        with tempfile.TemporaryDirectory() as tempdir:
-            trader = SimulationTTrader(
-                Gateway(), lambda: candidates, AuditLedger(Path(tempdir) / "t.db")
-            )
-            ranked = trader._ranked_snapshots()
-        self.assertEqual([row["code"] for row in ranked], ["US.CSX"])
-
-    def test_t_trader_sells_when_stock_reaches_its_atr_sell_zone(self) -> None:
-        class Gateway:
-            allowed_codes = {"US.CSX"}
-
-            def __init__(self):
-                self.submitted = None
-
-            @staticmethod
-            def account_snapshot():
-                return {
-                    "orders": [
-                        {
-                            "code": "US.CSX", "side": "BUY", "status": "FILLED_ALL",
-                            "quantity": 1, "dealtQuantity": 1,
-                            "remark": "AEGIS_T_CADENCE_TEST", "createdAt": "2026-07-20 09:45:00",
-                        }
-                    ]
-                }
-
-            @staticmethod
-            def quote_snapshot(codes):
-                return [{"code": codes[0], "lastPrice": 51, "marketState": "AFTERNOON"}]
-
-            def submit_order(self, order):
-                self.submitted = order
-                return {**order, "traceId": "t-exit", "status": "SUBMITTED"}
-
-        gateway = Gateway()
-        candidate = {
-            "code": "US.CSX", "selected": True,
-            "tStrategy": {"enabled": True, "buyAtOrBelow": 49, "sellAtOrAbove": 50, "hardStop": 47},
-        }
-        with tempfile.TemporaryDirectory() as tempdir:
-            trader = SimulationTTrader(
-                gateway, lambda: [candidate], AuditLedger(Path(tempdir) / "t.db")
-            )
-            enabled_policy = {**trader.policy(), "enabled": True}
-            with patch.object(trader, "policy", return_value=enabled_policy):
-                result = trader.tick()
-        self.assertEqual(result["action"], "CONDITIONAL_EXIT")
-        self.assertEqual(gateway.submitted["side"], "SELL")
-
-    def test_flat_account_builds_five_name_full_exposure_core(self) -> None:
-        class Gateway:
-            allowed_codes = {f"US.T{i}" for i in range(1, 6)}
-
-            def __init__(self):
-                self.submitted = []
-
-            @staticmethod
-            def account_snapshot():
-                return {
-                    "funds": {
-                        "totalAssets": 100_000,
-                        "availableFunds": 100_000,
-                        "marketValue": 0,
-                    },
-                    "positions": [],
-                    "orders": [],
-                }
-
-            @staticmethod
-            def quote_snapshot(codes):
-                return [
-                    {
-                        "code": code,
-                        "lastPrice": 100,
-                        "askPrice": 100,
-                        "marketState": "AFTERNOON",
-                        "suspended": False,
-                    }
-                    for code in codes
-                ]
-
-            def submit_order(self, order):
-                self.submitted.append(order)
-                return {**order, "traceId": f"core-{len(self.submitted)}", "status": "SUBMITTED"}
-
-        gateway = Gateway()
-        candidates = [
-            {
-                "code": f"US.T{i}",
-                "selected": True,
-                "tStrategy": {"enabled": True, "buyAtOrBelow": 100, "hardStop": 90},
-            }
-            for i in range(1, 6)
-        ]
-        with tempfile.TemporaryDirectory() as tempdir:
-            trader = SimulationTTrader(
-                gateway, lambda: candidates, AuditLedger(Path(tempdir) / "t.db")
-            )
-            enabled_policy = {**trader.policy(), "enabled": True}
-            with patch.object(trader, "policy", return_value=enabled_policy):
-                result = trader.tick()
-        self.assertEqual(result["action"], "FULL_EXPOSURE_ENTRY")
-        self.assertEqual(len(gateway.submitted), 5)
-        self.assertTrue(all(order["side"] == "BUY" for order in gateway.submitted))
-        self.assertGreaterEqual(sum(order["quantity"] * 100 for order in gateway.submitted), 99_000)
-        self.assertEqual(result["targetExposurePct"], 100.0)
+        self.assertEqual(status, 413)
 
 
 if __name__ == "__main__":

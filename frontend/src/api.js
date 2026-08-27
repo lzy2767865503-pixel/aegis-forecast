@@ -1,7 +1,15 @@
 async function request(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase()
+  const csrf = document.querySelector('meta[name="aegis-csrf-token"]')?.content || ''
+  const headers = { ...(options.headers || {}) }
+  if (method !== 'GET' && method !== 'HEAD') {
+    headers['Content-Type'] = 'application/json'
+    headers['X-Aegis-CSRF'] = csrf
+  }
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    credentials: 'same-origin',
     ...options,
+    headers,
   })
   const payload = await response.json()
   if (!response.ok) throw new Error(payload.error || payload.message || `请求失败：${response.status}`)
@@ -9,21 +17,18 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  health: () => request('/api/health'),
   status: () => request('/api/status'),
-  autonomy: () => request('/api/autonomy'),
   signals: () => request('/api/signals?limit=200'),
   universe: (query = '') => request(`/api/universe?limit=200&q=${encodeURIComponent(query)}`),
-  learning: () => request('/api/learning'),
+  integrity: () => request('/api/integrity'),
   performance: () => request('/api/performance'),
-  pnl: () => request('/api/pnl/history'),
   audit: () => request('/api/audit'),
   data: () => request('/api/data'),
   factors: () => request('/api/factors'),
-  moomoo: () => request('/api/moomoo/status'),
-  moomooAccount: () => request('/api/moomoo/account'),
-  submitMoomooOrder: (order) => request('/api/moomoo/orders', { method: 'POST', body: JSON.stringify(order) }),
-  updateTTrading: (policy) => request('/api/moomoo/t-trading', { method: 'POST', body: JSON.stringify(policy) }),
-  refreshPredictions: () => request('/api/predictions/refresh', { method: 'POST', body: '{}' }),
-  syncUniverse: () => request('/api/universe/sync', { method: 'POST', body: '{}' }),
-  runLearning: () => request('/api/learning/run', { method: 'POST', body: '{}' }),
+  privacy: () => request('/api/privacy'),
+  updatePrivacy: (settings) => request('/api/privacy', { method: 'POST', body: JSON.stringify(settings) }),
+  deleteLocalData: () => request('/api/privacy/delete-local-data', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE_LOCAL_DATA' }) }),
+  verifyScenario: () => request('/api/scenario/verify', { method: 'POST', body: '{}' }),
+  runIntegrityCheck: () => request('/api/integrity/run', { method: 'POST', body: '{}' }),
 }

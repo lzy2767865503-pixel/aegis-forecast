@@ -2,7 +2,7 @@ export default function FactorBars({ factors, compact = false }) {
   const items = factors?.items || []
   return (
     <section className={`panel factor-panel ${compact ? 'compact' : ''}`}>
-      <div className="panel-heading"><div><h2>因子研究</h2><p>所有因子均来自价格、成交量与市场相对强弱</p></div></div>
+      <div className="panel-heading"><div><h2>说明性因子维度</h2><p>全部数值由稳定哈希生成，不来自价格、成交量或训练数据</p></div></div>
       <div className="factor-list">
         {items.map((item) => (
           <div className="factor-row" key={item.name}>

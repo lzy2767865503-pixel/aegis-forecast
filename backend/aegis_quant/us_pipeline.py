@@ -10,13 +10,12 @@ from typing import Any
 import pandas as pd
 
 from technical_model.backtest import run_walk_forward
-from technical_model.data import load_json, source_ledger
 from technical_model.features import build_feature_panel
 from technical_model.report import export_support_files
 from technical_model.scoring import score_panel
 
 from .paths import CONFIG_ROOT, STORAGE_ROOT
-from .nasdaq100_universe import load_universe_config, securities, sync_universe_config
+from .nasdaq100_universe import load_universe_config, securities
 
 
 MODEL_CONFIG = CONFIG_ROOT / "model_config.json"
@@ -26,6 +25,30 @@ HISTORY_ROOT = OUTPUT_ROOT / "history"
 
 class OpenDDataError(RuntimeError):
     pass
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _source_ledger(histories: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for code, frame in histories.items():
+        if code.startswith("_") or frame.empty:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "name": str(frame["name"].iloc[-1]),
+                "first_date": frame["date"].min().date().isoformat(),
+                "last_date": frame["date"].max().date().isoformat(),
+                "rows": int(len(frame)),
+                "adjustment": "qfq",
+                "source_url": str(frame["source_url"].iloc[-1]),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("code").reset_index(drop=True)
 
 
 def _public_securities() -> list[dict[str, Any]]:
@@ -111,7 +134,7 @@ def _fetch_history(quote_context: Any, sdk: Any, code: str, name: str, start: st
 def _histories(refresh: bool) -> tuple[dict[str, pd.DataFrame], list[str]]:
     import moomoo as sdk
 
-    config = load_json(MODEL_CONFIG)
+    config = _load_json(MODEL_CONFIG)
     benchmark = dict(config["benchmark"])
     securities = _public_securities()
     records = securities + [benchmark]
@@ -176,16 +199,9 @@ def _histories(refresh: bool) -> tuple[dict[str, pd.DataFrame], list[str]]:
 
 
 def run(refresh: bool = True) -> dict[str, Any]:
-    config = load_json(MODEL_CONFIG)
-    universe_warnings: list[str] = []
-    if refresh:
-        try:
-            sync_universe_config()
-        except Exception as exc:
-            universe_warnings.append(f"官方成分股同步失败，沿用本地清单：{exc}")
+    config = _load_json(MODEL_CONFIG)
     histories, errors = _histories(refresh=refresh)
-    errors = universe_warnings + errors
-    ledger = source_ledger(histories)
+    ledger = _source_ledger(histories)
     panel, _market = build_feature_panel(
         histories=histories,
         benchmark_code=str(config["benchmark"]["code"]),

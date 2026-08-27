@@ -19,8 +19,8 @@ export default function SignalTable({ signals = [], expanded = false, onSelect }
     <section className={`panel signal-panel ${expanded ? 'full-panel' : ''}`}>
       <div className="panel-heading">
         <div>
-          <h2>{expanded ? '全部已覆盖股票' : '技术预测排名'}</h2>
-          <p>概率不是承诺；按样本外校准概率与技术共振排序</p>
+          <h2>{expanded ? '2026-08-26 快照研究样本' : '合成技术研究排名'}</h2>
+          <p>所有分数与参考值均由稳定哈希生成，不是市场观测或预测</p>
         </div>
         {expanded && (
           <div className="ranking-tools">
@@ -35,7 +35,7 @@ export default function SignalTable({ signals = [], expanded = false, onSelect }
       <div className="table-scroll">
         <table>
           <thead>
-            <tr><th>排名</th><th>代码 / 股票</th><th>技术形态</th><th>技术分</th><th>5日上涨概率</th><th>可行动概率</th><th>样本数</th><th>状态</th><th>详情</th></tr>
+            <tr><th>排名</th><th>代码 / 证券</th><th>说明性形态</th><th>生成技术分</th><th>说明性上行分数</th><th>说明性形态分数</th><th>生成结果行</th><th>情景状态</th><th>详情</th></tr>
           </thead>
           <tbody>
             {shown.map((item) => (
@@ -44,14 +44,14 @@ export default function SignalTable({ signals = [], expanded = false, onSelect }
                 <td><strong>{item.code}</strong><span className="subline">{item.name}</span></td>
                 <td>{item.strategy}</td>
                 <td>{item.technicalScore.toFixed(1)}</td>
-                <td>{percent(item.probabilityUp)}</td>
-                <td>{percent(item.probabilityAction)}</td>
-                <td>{item.sampleCount || '—'}</td>
+                <td>{percent(item.scenarioUpScore)}</td>
+                <td>{percent(item.scenarioPatternScore)}</td>
+                <td>{item.illustrativeOutcomeRows || '—'}</td>
                 <td><span className={`prediction-state ${item.selected ? 'selected' : 'abstain'}`}>{item.status}</span></td>
                 <td><button className="row-action" onClick={() => onSelect?.(item)} aria-label={`查看${item.name}`}><ChevronRight size={16} /></button></td>
               </tr>
             ))}
-            {!shown.length && <tr><td colSpan="9" className="empty-row">没有可展示的真实预测数据</td></tr>}
+            {!shown.length && <tr><td colSpan="9" className="empty-row">没有可展示的合成研究样本</td></tr>}
           </tbody>
         </table>
       </div>

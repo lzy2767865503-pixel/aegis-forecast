@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Quant Scenario Studio application mark</title>
+  <desc id="desc">Blue shield with a white Q and three green quantitative bars on a dark background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#07131f"/>
+      <stop offset="1" stop-color="#0a2a42"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="184" fill="url(#bg)"/>
+  <path d="M512 130 806 253l-41 405-253 236-253-236-41-405Z" fill="#082a43" stroke="#499aff" stroke-width="45" stroke-linejoin="round"/>
+  <circle cx="512" cy="497" r="188" fill="none" stroke="#e0f2ff" stroke-width="72"/>
+  <path d="m603 588 151 151" stroke="#e0f2ff" stroke-width="72" stroke-linecap="round"/>
+  <path d="M414 528v-89M512 528V402M610 528V344" stroke="#4fcfb7" stroke-width="35" stroke-linecap="round"/>
+</svg>

@@ -1,7 +1,8 @@
 {
   "name": "aegis-a-workstation",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.5.0",
+  "author": "LAI ZEYU（来泽宇）",
   "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=20",

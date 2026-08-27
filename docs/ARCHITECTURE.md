@@ -1,55 +1,98 @@
-# Architecture
+# Windows Store architecture
 
-## Design posture
+## Components
 
-Aegis Forecast is a modular monolith: one local HTTP process coordinates
-research artifacts, read-only monitoring, audit state and an optional
-simulation-only broker adapter. This keeps failure modes inspectable while the
-system is still a research product.
+1. **WinUI 3 shell** owns startup, shutdown, WebView2, package LocalState and the
+   child-process lifecycle.
+2. **PyInstaller onedir sidecar** contains the Python research runtime, compiled
+   React UI and deterministic synthetic demo resources.
+3. **Authenticated loopback API** serves UI and JSON from one origin. Each
+   launch uses independent session and CSRF tokens.
+4. **Scenario engine** loads the Nasdaq-100 constituent snapshot labeled
+   **2026-08-26** and stable-hash illustrative generated samples. It does not
+   load historical market observations or train a model.
 
-## Runtime layers
+The UI language is Simplified Chinese (`zh-CN`). The Store display name is
+**Quant Scenario Studio by LAI ZEYU**, the exact bilingual author credit is
+**LAI ZEYU（来泽宇）**. `PublisherDisplayName` is exactly **LAI ZEYU**.
+The non-visible package `Identity Name` is hard-locked to the reserved Partner
+Center value `LAIZEYU.QuantScenarioStudiobyLAIZEYU` for Store ID
+`9NWTH4KJX5GW`, while its technical Publisher is hard-locked to
+`CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8`.
 
-1. **Universe** - loads the committed Nasdaq-100 security snapshot and can
-   refresh it from the configured official endpoint.
-2. **Data** - selects private model artifacts when the operator points to them;
-   otherwise uses deterministic synthetic demo artifacts.
-3. **Research** - engineers six technical factor families and produces
-   probability-calibrated rankings using walk-forward evidence.
-4. **Decision support** - derives entry triggers, pullback bands, ATR
-   invalidation, staged take-profits, trailing stops and time exits.
-5. **Broker boundary** - lists simulation funds, positions and orders through
-   Moomoo OpenD only when installed. It rejects non-`SIMULATE` environments
-   before broker access.
-6. **Operations** - persists an autonomy heartbeat, profit snapshots and a
-   SHA-256 event chain in a local SQLite database.
-7. **Presentation** - serves a compiled React/Vite console from the same
-   localhost origin.
+## Non-bypassable Store invariant
 
-## Safety invariants
+`backend/aegis_quant/runtime_policy.py` contains no environment/configuration
+unlock and always denies execution. The HTTP handler rejects every legacy
+transaction, execution and scheduler route family before route dispatch.
 
-- Real-money order routing has no implementation.
-- The server binds to `127.0.0.1` unless an operator changes it.
-- Automated simulation execution is opt-in through
-  `AEGIS_ENABLE_SIMULATION_EXECUTION=1`.
-- Credentials remain inside the vendor gateway.
-- Symbol allowlisting happens before the adapter opens a trading context.
-- Runtime state and broker-derived data are excluded from the repository.
+The Store package additionally excludes brokerage SDKs, account gateways,
+financial-history modules, legacy execution modules and private market-data
+pipelines. It contains neither execution configuration nor a financial-account
+surface. The research service is fixed to bundled synthetic artifacts;
+`AEGIS_MODEL_ROOT` is ignored.
 
-## Artifact selection
+## Process and DOM-ready lifecycle
 
-At startup, the service resolves model artifacts in this order:
+```text
+WinUI starts
+  -> create 384-bit session token and package LocalState path
+  -> start AegisBackend.exe on 127.0.0.1 with an ephemeral port
+  -> wait for AEGIS_READY_URL
+  -> independently validate health, status, signals, universe and data APIs
+  -> set HttpOnly session cookie in WebView2
+  -> navigate to the exact loopback origin
+  -> wait until React has also loaded all core APIs successfully
+  -> execute a DOM identity/read-only/privacy/API-readiness smoke
+  -> write runtime/ui_ready.json only for an explicit QA request, bound to its
+     256-bit nonce, exact PIDs, installed paths, source commit and package hash
+Shell exits or is force-killed
+  -> sidecar observes the exact parent PID and exits
+```
 
-1. `AEGIS_MODEL_ROOT`, when explicitly configured;
-2. private runtime artifacts under `storage/models/nasdaq100`;
-3. bundled deterministic artifacts under `demo_data`.
+The shell shows a visible failure instead of treating a process/window handle as
+UI readiness. Native QA validates the marker, API fields, compiled EXE
+VersionInfo, exact running executable paths beneath `InstallLocation`, and the
+installed manifest. It force-kills the exact shell PID and requires the exact
+sidecar PID to exit through its parent watchdog.
 
-The API exposes `dataMode` so the frontend and tests can distinguish demo from
-private research artifacts.
+## Storage
 
-## Persistence
+Read-only resources resolve from the PyInstaller bundle. Mutable files resolve
+from the absolute LocalState path plus `PFN:<PackageFamilyName>` binding supplied
+by the shell. The backend verifies that path against `%LOCALAPPDATA%\Packages`,
+writes an ownership marker, and refuses deletion without an exact marker match.
+Deletion addresses only documented app-owned names and preserves unknown siblings.
 
-SQLite uses WAL mode for local operational records. The P&L ledger stores
-timestamped total-equity snapshots and derives daily, weekly, monthly and
-annual profit from the first and latest equity observations in each US trading
-day. Deposits and withdrawals require separate cash-flow adjustment before
-these values can be interpreted as investment performance.
+No financial-account data is read or stored. The app has no remote endpoint,
+telemetry, cloud account or background service. Its only socket is the
+authenticated loopback session between the shell/UI and the sidecar.
+
+## Build and release boundary
+
+One owner-only manual job from exact `main` runs on a protected, elevated,
+self-hosted Windows active interactive desktop. It injects the reserved
+`Identity Name`, hard-locks the account technical
+Publisher, and builds one private development MSIX exactly once. Native QA 1,
+native QA 2 and approved-version bounded WACK then use that same byte sequence.
+PIDs become cleanup targets only after process name, canonical path and creation
+time validation. WACK also binds cleanup to exact PackageFullName/PFN/AppCert
+roots captured during that run.
+
+The Store verification workflow uploads no Actions artifact at all. It parses
+strict private schemas, regenerates a small canonical record, scans it for
+embedded executable/archive/certificate/secret encodings, and writes only a
+fixed Job Summary.
+
+GitHub distribution is a separate portable ZIP, never the Store MSIX. A
+protected manual workflow uses the pinned SSL.com eSigner CKA/KSP with Microsoft
+SignTool to timestamp-sign every recursively discovered PE whose signer
+SimpleName is exactly `LAI ZEYU` or `来泽宇`. It verifies online signer and
+timestamp chains, runs two same-byte portable lifecycles, uploads a draft,
+downloads and revalidates it, removes the temporary signer, then publishes.
+The workflow then re-downloads the public release and closes the loop over exact
+asset hashes/signatures, tag immutability and current remote-main ancestry.
+
+Partner Center identity reservation, public privacy URL, final visual/accessibility
+review and Microsoft Store signing remain release-time inputs. A development
+signature or WACK PASS is not Store certification.

@@ -1,0 +1,935 @@
+name: Trusted Windows GitHub release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact immutable Windows release tag (windows-v1.5.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegis-trusted-windows-release
+  cancel-in-progress: false
+
+jobs:
+  sign-and-test:
+    name: Read-only signing, exact signatures, and two lifecycle passes
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
+      github.repository_owner == 'lzy2767865503-pixel' &&
+      github.actor == 'lzy2767865503-pixel' &&
+      github.triggering_actor == 'lzy2767865503-pixel' &&
+      github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: windows-github-release
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.release_metadata.outputs.source_commit }}
+      archive_name: ${{ steps.release_metadata.outputs.archive_name }}
+      archive_sha256: ${{ steps.release_metadata.outputs.archive_sha256 }}
+      checksum_sha256: ${{ steps.release_metadata.outputs.checksum_sha256 }}
+      signer_thumbprint: ${{ steps.release_metadata.outputs.signer_thumbprint }}
+    env:
+      AEGIS_TRUSTED_GITHUB_BUILD: "1"
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      APPROVED_TAG: ${{ vars.AEGIS_GITHUB_RELEASE_APPROVAL_TAG }}
+      AEGIS_TAG_RULESET_ID: "21631608"
+      AEGIS_MAIN_RULESET_ID: "21633557"
+      ARCHIVE_NAME: QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip
+    steps:
+      - name: Check out the exact selected immutable tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Initialize this run's exact temporary CKA path
+        shell: pwsh
+        run: |
+          $Root = Join-Path $env:RUNNER_TEMP "aegis-esigner-cka-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "CKA_WORKING_ROOT=$Root" >> $env:GITHUB_ENV
+
+      - name: Require exact tag, protected main, protected approval, and empty Release slot
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          if ($env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:GITHUB_REPOSITORY -cne 'lzy2767865503-pixel/aegis-forecast' -or
+              $env:GITHUB_ACTOR -cne 'lzy2767865503-pixel' -or
+              $env:GITHUB_TRIGGERING_ACTOR -cne 'lzy2767865503-pixel' -or
+              $env:GITHUB_REF -cne 'refs/heads/main') {
+            throw 'The trusted release accepts only an owner-dispatched or owner-rerun main workflow.'
+          }
+          if ($env:RELEASE_TAG -cne 'windows-v1.5.0' -or $env:APPROVED_TAG -cne $env:RELEASE_TAG) {
+            throw 'The protected environment must approve exactly windows-v1.5.0.'
+          }
+          if ($env:AEGIS_TAG_RULESET_ID -cne '21631608' -or $env:AEGIS_MAIN_RULESET_ID -cne '21633557') {
+            throw 'A protected repository ruleset ID drifted.'
+          }
+          function Assert-Rulesets {
+            $TagRuleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$env:AEGIS_TAG_RULESET_ID" | ConvertFrom-Json
+            $TagTypes = @($TagRuleset.rules | ForEach-Object type | Sort-Object)
+            if ($LASTEXITCODE -ne 0 -or [long]$TagRuleset.id -ne 21631608 -or $TagRuleset.enforcement -cne 'active' -or
+                $TagRuleset.target -cne 'tag' -or @($TagRuleset.bypass_actors).Count -ne 0 -or
+                (@($TagRuleset.conditions.ref_name.include) -join '|') -cne 'refs/tags/windows-v*' -or
+                @($TagRuleset.conditions.ref_name.exclude).Count -ne 0 -or ($TagTypes -join '|') -cne 'deletion|update') {
+              throw 'The active no-bypass Windows tag update/deletion ruleset is not exact.'
+            }
+            $MainRuleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$env:AEGIS_MAIN_RULESET_ID" | ConvertFrom-Json
+            $MainTypes = @($MainRuleset.rules | ForEach-Object type | Sort-Object)
+            $PullRules = @($MainRuleset.rules | Where-Object type -ceq 'pull_request')
+            if ($LASTEXITCODE -ne 0 -or [long]$MainRuleset.id -ne 21633557 -or $MainRuleset.enforcement -cne 'active' -or
+                $MainRuleset.target -cne 'branch' -or @($MainRuleset.bypass_actors).Count -ne 0 -or
+                (@($MainRuleset.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
+                @($MainRuleset.conditions.ref_name.exclude).Count -ne 0 -or
+                ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or $PullRules.Count -ne 1) {
+              throw 'The active no-bypass protected-main lineage ruleset is not exact.'
+            }
+            $Parameters = $PullRules[0].parameters
+            $ParameterKeys = @($Parameters.PSObject.Properties.Name | Sort-Object)
+            $ExpectedKeys = @('allowed_merge_methods', 'dismiss_stale_reviews_on_push', 'require_code_owner_review', 'require_extra_approval_for_unattributed_changes', 'require_last_push_approval', 'required_approving_review_count', 'required_review_thread_resolution', 'required_reviewers') | Sort-Object
+            if (($ParameterKeys -join '|') -cne ($ExpectedKeys -join '|') -or
+                (@($Parameters.allowed_merge_methods | Sort-Object) -join '|') -cne 'merge|rebase|squash' -or
+                -not $Parameters.dismiss_stale_reviews_on_push -or -not $Parameters.required_review_thread_resolution -or
+                $Parameters.require_code_owner_review -or $Parameters.require_extra_approval_for_unattributed_changes -or
+                $Parameters.require_last_push_approval -or [int]$Parameters.required_approving_review_count -ne 0 -or
+                @($Parameters.required_reviewers).Count -ne 0) {
+              throw 'The exact main pull-request/review-thread-resolution policy drifted.'
+            }
+          }
+          Assert-Rulesets
+          & git fetch --force origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)"
+          & git fetch --force origin 'refs/heads/main:refs/remotes/origin/main'
+          $HeadCommit = (& git rev-parse HEAD).Trim().ToLowerInvariant()
+          $LocalTagCommit = (& git rev-parse "$($env:RELEASE_TAG)^{}").Trim().ToLowerInvariant()
+          $MainCommit = (& git rev-parse refs/remotes/origin/main).Trim().ToLowerInvariant()
+          $RemoteLines = @(& git ls-remote --exit-code --tags origin "refs/tags/$($env:RELEASE_TAG)" "refs/tags/$($env:RELEASE_TAG)^{}")
+          $Peeled = @($RemoteLines | Where-Object { $_ -match "refs/tags/$([Regex]::Escape($env:RELEASE_TAG))\^\{\}$" })
+          $Direct = @($RemoteLines | Where-Object { $_ -match "refs/tags/$([Regex]::Escape($env:RELEASE_TAG))$" })
+          $RemoteTagCommit = if ($Peeled.Count -eq 1) { ($Peeled[0] -split '\s+')[0].ToLowerInvariant() } elseif ($Peeled.Count -eq 0 -and $Direct.Count -eq 1) { ($Direct[0] -split '\s+')[0].ToLowerInvariant() } else { throw 'Remote release tag is missing or ambiguous.' }
+          if ($HeadCommit -cnotmatch '^[0-9a-f]{40}$' -or $HeadCommit -cne $LocalTagCommit -or
+              $HeadCommit -cne $RemoteTagCommit -or $HeadCommit -cne $MainCommit) {
+            throw 'HEAD, immutable tag, remote tag, and protected main must identify one exact commit.'
+          }
+          "SELECTED_RELEASE_COMMIT=$HeadCommit" >> $env:GITHUB_ENV
+          $PSNativeCommandUseErrorActionPreference = $false
+          $Probe = @(& gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" 2>&1)
+          $ProbeExit = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($ProbeExit -eq 0 -or ($Probe -join "`n") -notmatch '(?i)\bHTTP\s+404\b') {
+            throw 'The GitHub Release slot is not provably empty.'
+          }
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: 3.13.14
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements-windows-build.lock.txt
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.424
+
+      - name: Run source, audit, frontend, and frozen-sidecar gates
+        shell: pwsh
+        run: |
+          ./scripts/windows/setup.ps1
+          ./scripts/windows/verify-pass1.ps1
+
+      - name: Build private portable staging once
+        shell: pwsh
+        run: ./scripts/windows/build-github-portable.ps1 -OutputRoot artifacts/github-release/portable
+
+      - name: Install and load the pinned SSL.com CKA/KSP client
+        id: cka
+        shell: pwsh
+        env:
+          SSL_ESIGNER_USERNAME: ${{ secrets.SSL_ESIGNER_USERNAME }}
+          SSL_ESIGNER_PASSWORD: ${{ secrets.SSL_ESIGNER_PASSWORD }}
+          SSL_ESIGNER_TOTP_SECRET: ${{ secrets.SSL_ESIGNER_TOTP_SECRET }}
+        run: ./scripts/windows/setup-esigner-cka.ps1 -WorkingRoot $env:CKA_WORKING_ROOT
+
+      - name: Cloud-HSM sign and strictly verify every recursively discovered PE
+        shell: pwsh
+        run: |
+          ./scripts/windows/sign-github-portable.ps1 -PortableRoot artifacts/github-release/portable -CertificateThumbprint '${{ steps.cka.outputs.thumbprint }}'
+          ./scripts/windows/verify-github-signatures.ps1 -Root artifacts/github-release/portable -ExpectedThumbprint '${{ steps.cka.outputs.thumbprint }}'
+
+      - name: Create the only public archive after trusted signing
+        shell: pwsh
+        run: ./scripts/windows/new-github-portable-archive.ps1 -PortableRoot artifacts/github-release/portable -ArchivePath (Join-Path $PWD "artifacts/github-release/$env:ARCHIVE_NAME")
+
+      - name: Signed same-byte portable lifecycle round 1
+        timeout-minutes: 40
+        shell: pwsh
+        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 1
+      - name: Signed same-byte portable lifecycle round 2
+        timeout-minutes: 40
+        shell: pwsh
+        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 2
+
+      - name: Remove the temporary cloud signer and all CKA state
+        if: always()
+        shell: pwsh
+        run: ./scripts/windows/cleanup-esigner-cka.ps1 -WorkingRoot $env:CKA_WORKING_ROOT -InstallRoot (Join-Path $env:CKA_WORKING_ROOT 'installed') -StateRoot (Join-Path $env:APPDATA 'eSignerCKA')
+
+      - name: Freeze exact publication inputs only after signer cleanup
+        id: release_metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          if ((Test-Path -LiteralPath $env:CKA_WORKING_ROOT) -or (Test-Path -LiteralPath (Join-Path $env:APPDATA 'eSignerCKA'))) { throw 'Cloud signer state remains after mandatory cleanup.' }
+          $ResidualPermittedSigners = @(
+            Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+              Where-Object { @('LAI ZEYU', '来泽宇') -ccontains $_.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) }
+          )
+          if ($ResidualPermittedSigners.Count -ne 0) { throw 'An exact-name cloud signing certificate remains after mandatory CKA cleanup.' }
+          $ReleaseRoot = (Resolve-Path -LiteralPath artifacts/github-release).Path
+          $Archive = Join-Path $ReleaseRoot $env:ARCHIVE_NAME
+          $Checksum = "$Archive.sha256"
+          $Inventory = @(Get-ChildItem -LiteralPath $ReleaseRoot -File | ForEach-Object Name | Sort-Object)
+          $ExpectedInventory = @($env:ARCHIVE_NAME, "$env:ARCHIVE_NAME.sha256") | Sort-Object
+          if (($Inventory -join '|') -cne ($ExpectedInventory -join '|')) { throw 'Final public release inventory is not exact.' }
+          $ArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          $ChecksumHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Checksum).Hash.ToLowerInvariant()
+          if ((Get-Content -Raw -LiteralPath $Checksum).Trim() -cne "$ArchiveHash  $env:ARCHIVE_NAME") { throw 'Final ZIP checksum is not canonical.' }
+          $Expanded = Join-Path $env:RUNNER_TEMP ("aegis-freeze-" + [Guid]::NewGuid().ToString('N'))
+          try {
+            Expand-Archive -LiteralPath $Archive -DestinationPath $Expanded
+            $Product = @(Get-ChildItem -LiteralPath $Expanded -Directory)
+            if ($Product.Count -ne 1 -or $Product[0].Name -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64') { throw 'Final ZIP top-level schema is invalid.' }
+            ./scripts/windows/verify-github-signatures.ps1 -Root $Product[0].FullName -ExpectedThumbprint '${{ steps.cka.outputs.thumbprint }}'
+          } finally { if (Test-Path -LiteralPath $Expanded) { Remove-Item -LiteralPath $Expanded -Recurse -Force } }
+          & git fetch --force origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)"
+          & git fetch --force origin 'refs/heads/main:refs/remotes/origin/main'
+          $TagCommit = (& git rev-parse "$($env:RELEASE_TAG)^{}").Trim().ToLowerInvariant()
+          $HeadCommit = (& git rev-parse HEAD).Trim().ToLowerInvariant()
+          $MainCommit = (& git rev-parse refs/remotes/origin/main).Trim().ToLowerInvariant()
+          if ($TagCommit -cne $env:SELECTED_RELEASE_COMMIT -or $HeadCommit -cne $env:SELECTED_RELEASE_COMMIT -or $MainCommit -cne $env:SELECTED_RELEASE_COMMIT) { throw 'Tag, HEAD, or protected main changed before handoff.' }
+          foreach ($RuleId in @($env:AEGIS_TAG_RULESET_ID, $env:AEGIS_MAIN_RULESET_ID)) {
+            $Ruleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$RuleId" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $Ruleset.enforcement -cne 'active' -or @($Ruleset.bypass_actors).Count -ne 0) { throw "Protected ruleset $RuleId changed before handoff." }
+          }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $Probe = @(& gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" 2>&1)
+          $ProbeExit = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($ProbeExit -eq 0 -or ($Probe -join "`n") -notmatch '(?i)\bHTTP\s+404\b') { throw 'Release slot is no longer provably empty.' }
+          "source_commit=$TagCommit" >> $env:GITHUB_OUTPUT
+          "archive_name=$env:ARCHIVE_NAME" >> $env:GITHUB_OUTPUT
+          "archive_sha256=$ArchiveHash" >> $env:GITHUB_OUTPUT
+          "checksum_sha256=$ChecksumHash" >> $env:GITHUB_OUTPUT
+          $SignerThumbprint = '${{ steps.cka.outputs.thumbprint }}'.ToLowerInvariant()
+          if ($SignerThumbprint -cnotmatch '^[0-9a-f]{40}$') { throw 'Frozen signer thumbprint is invalid.' }
+          "signer_thumbprint=$SignerThumbprint" >> $env:GITHUB_OUTPUT
+
+      - name: Upload only the tested signed ZIP and checksum for the isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/github-release/QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip
+            artifacts/github-release/QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Remove all private build work products after handoff
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Set-StrictMode -Version Latest
+          $Errors = [Collections.Generic.List[string]]::new()
+          foreach ($Relative in @('artifacts/github-release', 'artifacts/backend', 'artifacts/pyinstaller', 'artifacts/test-logs')) {
+            try {
+              $Target = [IO.Path]::GetFullPath((Join-Path $PWD $Relative)).TrimEnd('\')
+              $Artifacts = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts')).TrimEnd('\') + '\'
+              if (-not $Target.StartsWith($Artifacts, [StringComparison]::OrdinalIgnoreCase)) { throw 'target escaped artifacts' }
+              if (Test-Path -LiteralPath $Target) {
+                $Item = Get-Item -LiteralPath $Target -Force
+                $Reparse = @(Get-ChildItem -LiteralPath $Target -Force -Recurse -ErrorAction Stop | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 })
+                if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $Reparse.Count -ne 0) { throw 'cleanup tree contains a reparse point' }
+                Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction Stop
+              }
+              if (Test-Path -LiteralPath $Target) { throw 'cleanup target remained' }
+            } catch { $Errors.Add("$Relative`: $($_.Exception.Message)") }
+          }
+          if ($Errors.Count -ne 0) { throw "Release work-product cleanup failed: $($Errors -join ' | ')" }
+
+  publish-release:
+    name: Isolated no-checkout exact-ID publisher with rollback
+    needs: sign-and-test
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
+      github.repository_owner == 'lzy2767865503-pixel' &&
+      github.actor == 'lzy2767865503-pixel' &&
+      github.triggering_actor == 'lzy2767865503-pixel' &&
+      github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: windows-github-release
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_COMMIT: ${{ needs.sign-and-test.outputs.source_commit }}
+      EXPECTED_ARCHIVE_NAME: ${{ needs.sign-and-test.outputs.archive_name }}
+      EXPECTED_ARCHIVE_SHA256: ${{ needs.sign-and-test.outputs.archive_sha256 }}
+      EXPECTED_CHECKSUM_SHA256: ${{ needs.sign-and-test.outputs.checksum_sha256 }}
+      EXPECTED_SIGNER_THUMBPRINT: ${{ needs.sign-and-test.outputs.signer_thumbprint }}
+      RELEASE_OWNERSHIP_MARKER: '<!-- aegis-publisher:${{ github.run_id }}:${{ github.run_attempt }} -->'
+      AEGIS_TAG_RULESET_ID: "21631608"
+      AEGIS_MAIN_RULESET_ID: "21633557"
+    steps:
+      - name: Download the exact same-run signed publication input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aegis-signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publisher-input
+
+      - name: Verify, create exact-ID draft, publish, re-download, and rollback on ambiguity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          if ($env:RELEASE_TAG -cne 'windows-v1.5.0' -or
+              $env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:EXPECTED_ARCHIVE_NAME -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip' -or
+              $env:EXPECTED_ARCHIVE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:EXPECTED_CHECKSUM_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:EXPECTED_SIGNER_THUMBPRINT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:AEGIS_TAG_RULESET_ID -cne '21631608' -or $env:AEGIS_MAIN_RULESET_ID -cne '21633557' -or
+              $env:RELEASE_OWNERSHIP_MARKER -cnotmatch '^<!-- aegis-publisher:\d+:\d+ -->$' -or
+              [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw 'Isolated publisher inputs are missing or malformed.'
+          }
+          $InputRoot = (Resolve-Path -LiteralPath ./publisher-input).Path
+          $InputRootItem = Get-Item -LiteralPath $InputRoot -Force
+          $InputFiles = @(Get-ChildItem -LiteralPath $InputRoot -File -Force)
+          $InputDirectories = @(Get-ChildItem -LiteralPath $InputRoot -Directory -Force)
+          $Archive = Join-Path $InputRoot $env:EXPECTED_ARCHIVE_NAME
+          $Checksum = "$Archive.sha256"
+          if (($InputRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+              $InputFiles.Count -ne 2 -or $InputDirectories.Count -ne 0 -or
+              @($InputFiles | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0 -or
+              -not (Test-Path -LiteralPath $Archive -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $Checksum -PathType Leaf) -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant() -cne $env:EXPECTED_ARCHIVE_SHA256 -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Checksum).Hash.ToLowerInvariant() -cne $env:EXPECTED_CHECKSUM_SHA256 -or
+              (Get-Content -Raw -LiteralPath $Checksum).Trim() -cne "$env:EXPECTED_ARCHIVE_SHA256  $env:EXPECTED_ARCHIVE_NAME") {
+            throw 'Downloaded same-run publication input differs from the tested bytes.'
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+          $AllowedSimpleNames = @('LAI ZEYU', '来泽宇')
+          $CodeSigningOid = '1.3.6.1.5.5.7.3.3'
+          $TimeStampingOid = '1.3.6.1.5.5.7.3.8'
+          $Sha256Oid = '2.16.840.1.101.3.4.2.1'
+          $Rfc3161AttributeOids = @('1.2.840.113549.1.9.16.2.14', '1.3.6.1.4.1.311.3.3.1')
+          $LegacyCounterSignatureOid = '1.2.840.113549.1.9.6'
+          $ValidatedChainPolicies = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+          function Assert-OnlineCertificateChain {
+            param(
+              [Parameter(Mandatory = $true)]$Certificate,
+              [Parameter(Mandatory = $true)][string]$Label,
+              [switch]$IgnoreNotTimeValid
+            )
+            $PolicyKey = "$($Certificate.Thumbprint)|$([bool]$IgnoreNotTimeValid)"
+            if ($ValidatedChainPolicies.Contains($PolicyKey)) { return }
+            $Chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+            try {
+              $Chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+              $Chain.ChainPolicy.RevocationFlag = [Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+              $Chain.ChainPolicy.VerificationFlags = if ($IgnoreNotTimeValid) {
+                [Security.Cryptography.X509Certificates.X509VerificationFlags]::IgnoreNotTimeValid
+              } else {
+                [Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+              }
+              $Chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(60)
+              $Chain.ChainPolicy.DisableCertificateDownloads = $false
+              if (-not $Chain.Build($Certificate)) {
+                $Statuses = @($Chain.ChainStatus | ForEach-Object { $_.Status.ToString() + ':' + $_.StatusInformation.Trim() })
+                throw "$Label online chain/revocation validation failed: $($Statuses -join ', ')"
+              }
+              [void]$ValidatedChainPolicies.Add($PolicyKey)
+            } finally { $Chain.Dispose() }
+          }
+
+          function Get-TrustedSignTool {
+            $KitsRoot = [IO.Path]::GetFullPath((Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10')).TrimEnd('\')
+            $BinRoot = Join-Path $KitsRoot 'bin'
+            if (-not (Test-Path -LiteralPath $BinRoot -PathType Container)) { throw 'Versioned Windows SDK bin root is missing.' }
+            $Candidates = @(
+              Get-ChildItem -LiteralPath $BinRoot -Directory -Force |
+                Where-Object { $_.Name -cmatch '^\d+\.\d+\.\d+\.\d+$' } |
+                ForEach-Object {
+                  $Path = Join-Path $_.FullName 'x64\signtool.exe'
+                  if (Test-Path -LiteralPath $Path -PathType Leaf) { Get-Item -LiteralPath $Path -Force }
+                }
+            )
+            if ($Candidates.Count -eq 0) { throw 'No versioned x64 Windows SDK SignTool exists.' }
+            $Ranked = @($Candidates | Sort-Object @{ Expression = { [version]$_.Directory.Parent.Name }; Descending = $true })
+            $TopVersion = [version]$Ranked[0].Directory.Parent.Name
+            $Top = @($Ranked | Where-Object { [version]$_.Directory.Parent.Name -eq $TopVersion })
+            if ($Top.Count -ne 1) { throw 'Trusted Windows SDK SignTool resolution is ambiguous.' }
+            $Tool = $Top[0]
+            $Current = $Tool
+            $ReachedRoot = $false
+            while ($Current) {
+              $CurrentPath = [IO.Path]::GetFullPath($Current.FullName).TrimEnd('\')
+              if (($Current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Windows SDK tool path contains a reparse point.' }
+              if ($CurrentPath.Equals($KitsRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                $ReachedRoot = $true
+                break
+              }
+              $Current = $Current.Parent
+            }
+            if (-not $ReachedRoot -or
+                $Tool.VersionInfo.OriginalFilename -cne 'signtool.exe' -or
+                $Tool.VersionInfo.CompanyName -cne 'Microsoft Corporation') {
+              throw 'Resolved SignTool metadata is not exact Microsoft Windows SDK metadata.'
+            }
+            $Signature = Get-AuthenticodeSignature -LiteralPath $Tool.FullName
+            $MicrosoftSimpleName = if ($Signature.SignerCertificate) {
+              $Signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            } else { '' }
+            if ($Signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $Signature.SignerCertificate -or
+                -not $Signature.TimeStamperCertificate -or $MicrosoftSimpleName -cnotin @('Microsoft Windows', 'Microsoft Corporation')) {
+              throw 'Resolved Windows SDK SignTool is not validly Microsoft-signed and timestamped.'
+            }
+            Assert-OnlineCertificateChain -Certificate $Signature.SignerCertificate -Label 'Windows SDK SignTool signer' -IgnoreNotTimeValid
+            Assert-OnlineCertificateChain -Certificate $Signature.TimeStamperCertificate -Label 'Windows SDK SignTool timestamp authority'
+            return $Tool.FullName
+          }
+          $SignTool = Get-TrustedSignTool
+
+          function Get-MagicKind([string]$Path) {
+            $Stream = [IO.File]::OpenRead($Path)
+            try {
+              if ($Stream.Length -lt 4) { return 'OTHER' }
+              $Header = New-Object byte[] 4
+              [void]$Stream.Read($Header, 0, 4)
+              if ($Header[0] -eq 0x50 -and $Header[1] -eq 0x4B -and $Header[2] -eq 0x03 -and $Header[3] -eq 0x04) { return 'ZIP' }
+              if ($Header[0] -ne 0x4D -or $Header[1] -ne 0x5A) { return 'OTHER' }
+              if ($Stream.Length -lt 64) { return 'INVALID_MZ' }
+              $Stream.Position = 0x3C
+              $OffsetBytes = New-Object byte[] 4
+              if ($Stream.Read($OffsetBytes, 0, 4) -ne 4) { return 'INVALID_MZ' }
+              $Offset = [BitConverter]::ToUInt32($OffsetBytes, 0)
+              if ($Offset -gt $Stream.Length - 4) { return 'INVALID_MZ' }
+              $Stream.Position = $Offset
+              $Signature = New-Object byte[] 4
+              if ($Stream.Read($Signature, 0, 4) -eq 4 -and $Signature[0] -eq 0x50 -and $Signature[1] -eq 0x45 -and $Signature[2] -eq 0 -and $Signature[3] -eq 0) { return 'MZ_PE' }
+              return 'INVALID_MZ'
+            } finally { $Stream.Dispose() }
+          }
+
+          function Get-ExactSignatureBlob([string]$Path) {
+            $Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            $Reader = [IO.BinaryReader]::new($Stream)
+            try {
+              if ($Stream.Length -lt 256 -or $Reader.ReadUInt16() -ne 0x5A4D) { throw "Not a bounded PE: $Path" }
+              $Stream.Position = 0x3C
+              $PeOffset = $Reader.ReadInt32()
+              if ($PeOffset -lt 0 -or [int64]$PeOffset + 256 -gt $Stream.Length) { throw "Invalid PE offset: $Path" }
+              $Stream.Position = $PeOffset
+              if ($Reader.ReadUInt32() -ne 0x00004550) { throw "Missing PE signature: $Path" }
+              $OptionalHeader = [int64]$PeOffset + 24
+              $Stream.Position = [int64]$PeOffset + 20
+              $OptionalHeaderSize = [int64]$Reader.ReadUInt16()
+              $Stream.Position = $OptionalHeader
+              $Magic = $Reader.ReadUInt16()
+              $HeaderPolicy = switch ($Magic) {
+                0x10B { [pscustomobject]@{ minimumSize = 224; directoryOffset = $OptionalHeader + 96; numberOfDirectoriesOffset = $OptionalHeader + 92 } }
+                0x20B { [pscustomobject]@{ minimumSize = 240; directoryOffset = $OptionalHeader + 112; numberOfDirectoriesOffset = $OptionalHeader + 108 } }
+                default { throw "Unsupported PE magic: $Path" }
+              }
+              if ($OptionalHeaderSize -lt [int64]$HeaderPolicy.minimumSize -or
+                  $OptionalHeader + $OptionalHeaderSize -gt $Stream.Length -or
+                  [int64]$HeaderPolicy.directoryOffset + 40 -gt $OptionalHeader + $OptionalHeaderSize) {
+                throw "Truncated PE optional header: $Path"
+              }
+              $Stream.Position = [int64]$HeaderPolicy.numberOfDirectoriesOffset
+              if ($Reader.ReadUInt32() -lt 5) { throw "Missing PE certificate-table directory: $Path" }
+              $Stream.Position = [int64]$HeaderPolicy.directoryOffset + 32
+              $CertificateOffset = [int64]$Reader.ReadUInt32()
+              $CertificateSize = [int64]$Reader.ReadUInt32()
+              if ($CertificateOffset -le 0 -or ($CertificateOffset % 8) -ne 0 -or $CertificateSize -lt 8 -or $CertificateSize -gt 16777216 -or $CertificateOffset + $CertificateSize -ne $Stream.Length) { throw "Nonterminal or invalid PE certificate table: $Path" }
+              $Stream.Position = $CertificateOffset
+              $CertificateLength = [int64]$Reader.ReadUInt32()
+              $Revision = $Reader.ReadUInt16()
+              $Type = $Reader.ReadUInt16()
+              if ($CertificateLength -lt 8 -or $CertificateLength -gt $CertificateSize -or $Type -ne 2 -or $Revision -notin @(0x0100, 0x0200) -or
+                  (($CertificateLength + 7) -band (-bnot 7)) -ne $CertificateSize) { throw "PE does not contain exactly one aligned PKCS#7 WIN_CERTIFICATE: $Path" }
+              $Blob = $Reader.ReadBytes([int]($CertificateLength - 8))
+              if ($Blob.Length -ne [int]($CertificateLength - 8)) { throw "Truncated PE signature blob: $Path" }
+              $Padding = $Reader.ReadBytes([int]($CertificateSize - $CertificateLength))
+              if ($Padding.Length -ne [int]($CertificateSize - $CertificateLength) -or @($Padding | Where-Object { $_ -ne 0 }).Count -ne 0) { throw "Truncated or non-zero PE signature padding: $Path" }
+              return $Blob
+            } finally { $Reader.Dispose(); $Stream.Dispose() }
+          }
+
+          function Invoke-SignToolVerify([string]$Path, [switch]$Verbose) {
+            $Arguments = [Collections.Generic.List[string]]::new()
+            foreach ($Argument in @('verify', '/pa', '/all', '/tw')) { $Arguments.Add($Argument) }
+            if ($Verbose) { $Arguments.Add('/v') }
+            $Arguments.Add($Path)
+            $Info = [Diagnostics.ProcessStartInfo]::new()
+            $Info.FileName = $SignTool
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            foreach ($Argument in $Arguments) { [void]$Info.ArgumentList.Add($Argument) }
+            $Process = [Diagnostics.Process]::new()
+            $Process.StartInfo = $Info
+            try {
+              if (-not $Process.Start()) { throw "SignTool did not start: $Path" }
+              $Stdout = $Process.StandardOutput.ReadToEndAsync()
+              $Stderr = $Process.StandardError.ReadToEndAsync()
+              if (-not $Process.WaitForExit(180000)) {
+                try { $Process.Kill($true) } catch { }
+                if (-not $Process.WaitForExit(30000)) { throw "SignTool tree remained after timeout: $Path" }
+                throw "SignTool exceeded its hard timeout: $Path"
+              }
+              $Tasks = [Threading.Tasks.Task[]]@($Stdout, $Stderr)
+              if (-not [Threading.Tasks.Task]::WaitAll($Tasks, 30000)) { throw "SignTool output pipes remained: $Path" }
+              $Output = $Stdout.GetAwaiter().GetResult() + [Environment]::NewLine + $Stderr.GetAwaiter().GetResult()
+              if ($Process.ExitCode -ne 0) { throw "SignTool rejected $Path with exit code $($Process.ExitCode)." }
+              return $Output
+            } finally { $Process.Dispose() }
+          }
+
+          function Assert-ExactPeSignature([string]$Path) {
+            $Cms = [Security.Cryptography.Pkcs.SignedCms]::new()
+            $Cms.Decode((Get-ExactSignatureBlob $Path))
+            if ($Cms.SignerInfos.Count -ne 1) { throw "PE must have exactly one primary signer: $Path" }
+            $SignerInfo = $Cms.SignerInfos[0]
+            if ($SignerInfo.DigestAlgorithm.Value -cne $Sha256Oid -or -not $SignerInfo.Certificate) { throw "PE signer is missing or not SHA-256: $Path" }
+            $UnsignedOids = @($SignerInfo.UnsignedAttributes | ForEach-Object { $_.Oid.Value })
+            if (@($UnsignedOids | Where-Object { $Rfc3161AttributeOids -ccontains $_ }).Count -ne 1 -or $UnsignedOids -ccontains $LegacyCounterSignatureOid) {
+              throw "PE must have exactly one RFC3161 attribute and no legacy countersignature: $Path"
+            }
+            if ($SignerInfo.Certificate.Thumbprint.ToLowerInvariant() -cne $env:EXPECTED_SIGNER_THUMBPRINT) { throw "CMS signer thumbprint changed: $Path" }
+            $Compact = Invoke-SignToolVerify -Path $Path
+            $Verbose = Invoke-SignToolVerify -Path $Path -Verbose
+            $Rows = [regex]::Matches($Compact, '(?im)^\s*(?<index>\d+)\s+(?<algorithm>sha(?:1|256|384|512))\s+(?<timestamp>\S+)\s*$')
+            $Indexes = [regex]::Matches($Verbose, '(?im)^\s*Signature Index:\s*(?<index>\d+)(?:\s|$)')
+            $FileHashes = [regex]::Matches($Verbose, '(?im)^\s*Hash of file \((?<algorithm>[^)]+)\):\s*[0-9a-f]{64}\s*$')
+            if ($Rows.Count -ne 1 -or $Rows[0].Groups['index'].Value -cne '0' -or
+                $Rows[0].Groups['algorithm'].Value.ToLowerInvariant() -cne 'sha256' -or
+                $Rows[0].Groups['timestamp'].Value.ToUpperInvariant() -cne 'RFC3161' -or
+                $Indexes.Count -ne 1 -or $Indexes[0].Groups['index'].Value -cne '0' -or
+                $FileHashes.Count -ne 1 -or $FileHashes[0].Groups['algorithm'].Value.ToLowerInvariant() -cne 'sha256' -or
+                [regex]::Matches($Verbose, '(?im)^\s*Number of (?:files|signatures) successfully Verified:\s*1\s*$').Count -ne 1 -or
+                $Verbose -notmatch '(?im)^\s*Number of warnings:\s*0\s*$' -or $Verbose -notmatch '(?im)^\s*Number of errors:\s*0\s*$') {
+              throw "SignTool did not prove exactly one warning-free SHA-256/RFC3161 signature index 0: $Path"
+            }
+            $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+            if ($Signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $Signature.SignerCertificate -or -not $Signature.TimeStamperCertificate) { throw "WinTrust signature or timestamp is invalid: $Path" }
+            $Signer = $Signature.SignerCertificate
+            $SimpleName = $Signer.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($SimpleName -cnotin $AllowedSimpleNames -or $Signer.Thumbprint.ToLowerInvariant() -cne $env:EXPECTED_SIGNER_THUMBPRINT -or
+                $Signer.Thumbprint -cne $SignerInfo.Certificate.Thumbprint -or $Signer.Subject -ceq $Signer.Issuer -or
+                -not (@($Signer.EnhancedKeyUsageList) | Where-Object { $_.ObjectId.Value -ceq $CodeSigningOid })) {
+              throw "PE is not signed by the one exact publicly trusted LAI signer: $Path"
+            }
+            $TimeStamper = $Signature.TimeStamperCertificate
+            $TimestampEkus = @($TimeStamper.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value })
+            if ($TimeStamper.Subject -ceq $TimeStamper.Issuer -or $TimestampEkus.Count -ne 1 -or $TimestampEkus[0] -cne $TimeStampingOid) { throw "PE timestamp authority is invalid: $Path" }
+            Assert-OnlineCertificateChain -Certificate $Signer -Label "$(Split-Path -Leaf $Path) signer"
+            Assert-OnlineCertificateChain -Certificate $TimeStamper -Label "$(Split-Path -Leaf $Path) timestamp authority"
+          }
+
+          function Assert-NestedZipHasNoExecutable([string]$Path) {
+            $Zip = [IO.Compression.ZipFile]::OpenRead($Path)
+            $Total = [long]0
+            try {
+              $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+              foreach ($Entry in $Zip.Entries) {
+                $Name = $Entry.FullName.Replace('\', '/')
+                if ([string]::IsNullOrWhiteSpace($Name) -or [IO.Path]::IsPathRooted($Name) -or $Name.Split('/') -contains '..' -or -not $Seen.Add($Name.TrimEnd('/'))) { throw 'Nested ZIP has an unsafe or duplicate path.' }
+                if ((($Entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'Nested ZIP has a symlink.' }
+                $Total += [long]$Entry.Length
+                if ($Entry.Length -gt 134217728 -or $Total -gt 1073741824) { throw 'Nested ZIP exceeds the inspection bound.' }
+                if ($Entry.Length -eq 0) { continue }
+                $EntryStream = $Entry.Open()
+                try {
+                  $Header = New-Object byte[] 4
+                  $Read = $EntryStream.Read($Header, 0, 4)
+                  if ($Read -ge 2 -and $Header[0] -eq 0x4D -and $Header[1] -eq 0x5A) { throw "Nested ZIP embeds MZ: $Name" }
+                  if ($Read -eq 4 -and $Header[0] -eq 0x50 -and $Header[1] -eq 0x4B -and $Header[2] -eq 0x03 -and $Header[3] -eq 0x04) { throw "Nested ZIP embeds an archive: $Name" }
+                } finally { $EntryStream.Dispose() }
+              }
+            } finally { $Zip.Dispose() }
+          }
+
+          function Assert-ArchiveSignatures([string]$ArchivePath, [string]$Phase) {
+            $Root = Join-Path $env:RUNNER_TEMP ("aegis-publisher-$Phase-" + [Guid]::NewGuid().ToString('N'))
+            try {
+              Expand-Archive -LiteralPath $ArchivePath -DestinationPath $Root
+              $Products = @(Get-ChildItem -LiteralPath $Root -Directory)
+              if ($Products.Count -ne 1 -or $Products[0].Name -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64') { throw "ZIP top-level schema is invalid during $Phase." }
+              $Entries = @(Get-ChildItem -LiteralPath $Products[0].FullName -Recurse -Force)
+              if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw "ZIP contains a reparse point during $Phase." }
+              $PeFiles = [Collections.Generic.List[IO.FileInfo]]::new()
+              foreach ($File in @($Entries | Where-Object { -not $_.PSIsContainer })) {
+                $Kind = Get-MagicKind $File.FullName
+                if ($Kind -ceq 'INVALID_MZ') { throw "ZIP contains an invalid MZ during $Phase." }
+                if ($Kind -ceq 'ZIP') { Assert-NestedZipHasNoExecutable $File.FullName }
+                if ($Kind -ceq 'MZ_PE') { $PeFiles.Add($File) }
+              }
+              if ($PeFiles.Count -lt 2) { throw "ZIP contains too few discoverable PEs during $Phase." }
+              foreach ($PeFile in $PeFiles) { Assert-ExactPeSignature $PeFile.FullName }
+            } finally { if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force } }
+          }
+          Assert-ArchiveSignatures -ArchivePath $Archive -Phase 'same-run-input'
+
+          $ExpectedReleaseTitle = 'Quant Scenario Studio by LAI ZEYU 1.5.0 for Windows'
+          $ExpectedReleaseNotes = 'Created and authored by LAI ZEYU（来泽宇）. This portable ZIP is separate from the private unsigned Microsoft Store handoff. Every recursively discovered Windows PE has exactly one publicly trusted SHA-256/RFC 3161 Authenticode signature by LAI ZEYU or 来泽宇, and these unchanged ZIP bytes passed two complete UI/API/watchdog/cleanup lifecycle rounds.'
+          $ExpectedReleaseBody = "$ExpectedReleaseNotes`n`n$env:RELEASE_OWNERSHIP_MARKER"
+          $ApiBase = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          $ApiHeaders = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GH_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+            'User-Agent' = 'aegis-exact-id-protected-publisher'
+          }
+
+          function Invoke-GitHubJsonRequest {
+            param(
+              [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST', 'PATCH')][string]$Method,
+              [Parameter(Mandatory = $true)][string]$Uri,
+              [Parameter(Mandatory = $true)][int[]]$ExpectedStatus,
+              [object]$Body = $null
+            )
+            $Parameters = @{ Uri = $Uri; Method = $Method; Headers = $ApiHeaders; SkipHttpErrorCheck = $true; TimeoutSec = 120 }
+            if ($null -ne $Body) { $Parameters.ContentType = 'application/json'; $Parameters.Body = $Body | ConvertTo-Json -Depth 8 -Compress }
+            $Response = Invoke-WebRequest @Parameters
+            $Status = [int]$Response.StatusCode
+            if ($Status -notin $ExpectedStatus) {
+              $Detail = [string]$Response.Content
+              if ($Detail.Length -gt 1000) { $Detail = $Detail.Substring(0, 1000) }
+              throw "GitHub REST $Method $Uri returned HTTP $Status`: $Detail"
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$Response.Content)) { return $null }
+            try { return ([string]$Response.Content | ConvertFrom-Json) } catch { throw "GitHub REST $Method $Uri returned malformed JSON." }
+          }
+
+          function Get-ReleaseByTagOrNull {
+            $Matches = [Collections.Generic.List[object]]::new()
+            $Complete = $false
+            foreach ($Page in 1..10) {
+              $Releases = @(Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/releases?per_page=100&page=$Page" -ExpectedStatus @(200))
+              if ($Releases.Count -gt 100) { throw 'GitHub returned an oversized Release page.' }
+              foreach ($Release in $Releases) { if ([string]$Release.tag_name -ceq $env:RELEASE_TAG) { $Matches.Add($Release) } }
+              if ($Releases.Count -lt 100) { $Complete = $true; break }
+            }
+            if (-not $Complete) { throw 'Release listing exceeded the strict 1,000-item bound.' }
+            if ($Matches.Count -gt 1) { throw 'Multiple visible Releases claim the selected tag.' }
+            if ($Matches.Count -eq 0) { return $null }
+            return $Matches[0]
+          }
+
+          function Get-ReleaseByIdOrNull([long]$ReleaseId) {
+            $Response = Invoke-WebRequest -Uri "$ApiBase/releases/$ReleaseId" -Method 'GET' -Headers $ApiHeaders -SkipHttpErrorCheck -TimeoutSec 120
+            $Status = [int]$Response.StatusCode
+            if ($Status -eq 404) { return $null }
+            if ($Status -ne 200) { throw "Exact-ID Release GET returned HTTP $Status." }
+            try { $Release = [string]$Response.Content | ConvertFrom-Json } catch { throw 'Exact-ID Release GET returned malformed JSON.' }
+            if ([long]$Release.id -ne $ReleaseId) { throw 'Exact-ID Release GET returned a different ID.' }
+            return $Release
+          }
+
+          function Assert-OwnedRelease {
+            param(
+              [Parameter(Mandatory = $true)]$Release,
+              [Parameter(Mandatory = $true)][long]$ExpectedId,
+              [Parameter(Mandatory = $true)][DateTimeOffset]$CreatedNotBefore,
+              [ValidateSet('any', 'draft', 'public')][string]$ExpectedVisibility = 'any'
+            )
+            try {
+              $CreatedAt = [DateTimeOffset]::Parse([string]$Release.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+            } catch { throw 'Release created_at is missing or malformed.' }
+            if ([long]$Release.id -ne $ExpectedId -or $ExpectedId -le 0 -or
+                [string]$Release.tag_name -cne $env:RELEASE_TAG -or
+                [string]$Release.name -cne $ExpectedReleaseTitle -or [string]$Release.body -cne $ExpectedReleaseBody -or
+                [string]$Release.author.login -cne 'github-actions[bot]' -or $Release.prerelease -ne $false -or
+                [string]$Release.url -cne "$ApiBase/releases/$ExpectedId" -or
+                $CreatedAt -lt $CreatedNotBefore -or $CreatedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
+              throw 'Release does not carry this run exact ID, owner, marker, title, body, tag, API URL, and creation-window proof.'
+            }
+            if (($ExpectedVisibility -ceq 'draft' -and $Release.draft -ne $true) -or
+                ($ExpectedVisibility -ceq 'public' -and $Release.draft -ne $false)) {
+              throw "Owned Release visibility is not $ExpectedVisibility."
+            }
+          }
+
+          function Get-OwnedRelease {
+            param(
+              [Parameter(Mandatory = $true)][long]$ReleaseId,
+              [Parameter(Mandatory = $true)][DateTimeOffset]$CreatedNotBefore,
+              [ValidateSet('any', 'draft', 'public')][string]$ExpectedVisibility = 'any'
+            )
+            $Release = Get-ReleaseByIdOrNull $ReleaseId
+            if (-not $Release) { throw "Owned Release ID $ReleaseId no longer exists." }
+            Assert-OwnedRelease -Release $Release -ExpectedId $ReleaseId -CreatedNotBefore $CreatedNotBefore -ExpectedVisibility $ExpectedVisibility
+            return $Release
+          }
+
+          function Get-RemoteTagCommit {
+            $EncodedTag = [Uri]::EscapeDataString($env:RELEASE_TAG)
+            $Reference = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/git/ref/tags/$EncodedTag" -ExpectedStatus @(200)
+            if ([string]$Reference.ref -cne "refs/tags/$env:RELEASE_TAG") { throw 'Tag-ref response is not the exact selected tag.' }
+            $ObjectType = [string]$Reference.object.type
+            $ObjectSha = ([string]$Reference.object.sha).ToLowerInvariant()
+            foreach ($Depth in 1..4) {
+              if ($ObjectSha -cnotmatch '^[0-9a-f]{40}$') { throw 'Release ref SHA is malformed.' }
+              if ($ObjectType -ceq 'commit') { return $ObjectSha }
+              if ($ObjectType -cne 'tag') { throw 'Release ref does not resolve to a commit or annotated tag.' }
+              $TagObject = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/git/tags/$ObjectSha" -ExpectedStatus @(200)
+              if ([string]$TagObject.sha -cne $ObjectSha) { throw 'Annotated-tag response does not bind the requested object.' }
+              $ObjectType = [string]$TagObject.object.type
+              $ObjectSha = ([string]$TagObject.object.sha).ToLowerInvariant()
+            }
+            throw 'Annotated release tag nesting exceeded the strict bound.'
+          }
+
+          function Assert-RepositoryRulesets {
+            $Tag = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/rulesets/$env:AEGIS_TAG_RULESET_ID" -ExpectedStatus @(200)
+            $TagTypes = @($Tag.rules | ForEach-Object type | Sort-Object)
+            if ([long]$Tag.id -ne 21631608 -or $Tag.enforcement -cne 'active' -or $Tag.target -cne 'tag' -or
+                @($Tag.bypass_actors).Count -ne 0 -or (@($Tag.conditions.ref_name.include) -join '|') -cne 'refs/tags/windows-v*' -or
+                @($Tag.conditions.ref_name.exclude).Count -ne 0 -or ($TagTypes -join '|') -cne 'deletion|update') {
+              throw 'Exact protected Windows tag ruleset drifted.'
+            }
+            $Main = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/rulesets/$env:AEGIS_MAIN_RULESET_ID" -ExpectedStatus @(200)
+            $MainTypes = @($Main.rules | ForEach-Object type | Sort-Object)
+            $PullRules = @($Main.rules | Where-Object type -ceq 'pull_request')
+            if ([long]$Main.id -ne 21633557 -or $Main.enforcement -cne 'active' -or $Main.target -cne 'branch' -or
+                @($Main.bypass_actors).Count -ne 0 -or (@($Main.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
+                @($Main.conditions.ref_name.exclude).Count -ne 0 -or ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or
+                $PullRules.Count -ne 1 -or -not $PullRules[0].parameters.dismiss_stale_reviews_on_push -or
+                -not $PullRules[0].parameters.required_review_thread_resolution -or
+                (@($PullRules[0].parameters.allowed_merge_methods | Sort-Object) -join '|') -cne 'merge|rebase|squash') {
+              throw 'Exact protected-main ruleset or review-thread gate drifted.'
+            }
+          }
+
+          function Assert-TagOnProtectedMain {
+            Assert-RepositoryRulesets
+            if ((Get-RemoteTagCommit) -cne $env:SOURCE_COMMIT) { throw 'Remote release tag moved.' }
+            $Main = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/git/ref/heads/main" -ExpectedStatus @(200)
+            if ([string]$Main.ref -cne 'refs/heads/main' -or [string]$Main.object.type -cne 'commit' -or
+                [string]$Main.object.sha.ToLowerInvariant() -cne $env:SOURCE_COMMIT) {
+              throw 'Release tag is not the exact current protected-main commit.'
+            }
+          }
+
+          function Upload-OwnedReleaseAsset {
+            param(
+              [Parameter(Mandatory = $true)][long]$ReleaseId,
+              [Parameter(Mandatory = $true)][DateTimeOffset]$CreatedNotBefore,
+              [Parameter(Mandatory = $true)][string]$FilePath
+            )
+            [void](Get-OwnedRelease -ReleaseId $ReleaseId -CreatedNotBefore $CreatedNotBefore -ExpectedVisibility 'draft')
+            $File = Get-Item -LiteralPath $FilePath
+            $EncodedName = [Uri]::EscapeDataString($File.Name)
+            $Response = Invoke-WebRequest -Uri "https://uploads.github.com/repos/$env:GITHUB_REPOSITORY/releases/$ReleaseId/assets?name=$EncodedName" -Method 'POST' -Headers $ApiHeaders -ContentType 'application/octet-stream' -InFile $File.FullName -SkipHttpErrorCheck -TimeoutSec 300
+            if ([int]$Response.StatusCode -ne 201) { throw "Exact-ID asset upload returned HTTP $([int]$Response.StatusCode)." }
+            try { $Asset = [string]$Response.Content | ConvertFrom-Json } catch { throw 'Exact-ID asset upload returned malformed JSON.' }
+            $Digest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
+            if ([long]$Asset.id -le 0 -or [string]$Asset.name -cne $File.Name -or [string]$Asset.state -cne 'uploaded' -or
+                [long]$Asset.size -ne $File.Length -or [string]$Asset.digest -cne $Digest) { throw 'Exact-ID upload response does not bind the local file.' }
+          }
+
+          function Assert-RemoteAssets {
+            param(
+              [Parameter(Mandatory = $true)][long]$ReleaseId,
+              [Parameter(Mandatory = $true)][DateTimeOffset]$CreatedNotBefore,
+              [Parameter(Mandatory = $true)][string]$Phase,
+              [Parameter(Mandatory = $true)][ValidateSet('draft', 'public')][string]$ExpectedVisibility
+            )
+            $Release = Get-OwnedRelease -ReleaseId $ReleaseId -CreatedNotBefore $CreatedNotBefore -ExpectedVisibility $ExpectedVisibility
+            $ExpectedNames = @($env:EXPECTED_ARCHIVE_NAME, "$env:EXPECTED_ARCHIVE_NAME.sha256") | Sort-Object
+            $ExpectedDigests = @{
+              $env:EXPECTED_ARCHIVE_NAME = "sha256:$env:EXPECTED_ARCHIVE_SHA256"
+              "$env:EXPECTED_ARCHIVE_NAME.sha256" = "sha256:$env:EXPECTED_CHECKSUM_SHA256"
+            }
+            $Assets = @($Release.assets)
+            $Names = @($Assets | ForEach-Object { [string]$_.name }) | Sort-Object
+            $AssetIds = @($Assets | ForEach-Object { [long]$_.id }) | Sort-Object
+            if ($Assets.Count -ne 2 -or (Compare-Object $ExpectedNames $Names) -or
+                @($Assets | Where-Object { [long]$_.id -le 0 -or [string]$_.state -cne 'uploaded' -or [string]$_.digest -cne $ExpectedDigests[[string]$_.name] }).Count -ne 0) {
+              throw "Owned Release asset inventory is invalid during $Phase."
+            }
+            $RemoteRoot = Join-Path $env:RUNNER_TEMP ("aegis-remote-$Phase-" + [Guid]::NewGuid().ToString('N'))
+            try {
+              New-Item -ItemType Directory -Path $RemoteRoot | Out-Null
+              $DownloadHeaders = $ApiHeaders.Clone()
+              $DownloadHeaders['Accept'] = 'application/octet-stream'
+              foreach ($Asset in $Assets) {
+                $Target = Join-Path $RemoteRoot ([string]$Asset.name)
+                $Response = Invoke-WebRequest -Uri ([string]$Asset.url) -Headers $DownloadHeaders -OutFile $Target -PassThru -SkipHttpErrorCheck -TimeoutSec 300
+                if ([int]$Response.StatusCode -ne 200) { throw "Exact-ID asset download returned HTTP $([int]$Response.StatusCode) during $Phase." }
+              }
+              $RemoteArchive = Join-Path $RemoteRoot $env:EXPECTED_ARCHIVE_NAME
+              $RemoteChecksum = "$RemoteArchive.sha256"
+              if (@(Get-ChildItem -LiteralPath $RemoteRoot -File).Count -ne 2 -or
+                  (Get-FileHash -Algorithm SHA256 -LiteralPath $RemoteArchive).Hash.ToLowerInvariant() -cne $env:EXPECTED_ARCHIVE_SHA256 -or
+                  (Get-FileHash -Algorithm SHA256 -LiteralPath $RemoteChecksum).Hash.ToLowerInvariant() -cne $env:EXPECTED_CHECKSUM_SHA256 -or
+                  (Get-Content -Raw -LiteralPath $RemoteChecksum).Trim() -cne "$env:EXPECTED_ARCHIVE_SHA256  $env:EXPECTED_ARCHIVE_NAME") {
+                throw "Remote exact-ID assets differ from the twice-tested inputs during $Phase."
+              }
+              Assert-ArchiveSignatures -ArchivePath $RemoteArchive -Phase $Phase
+              $Confirmed = Get-OwnedRelease -ReleaseId $ReleaseId -CreatedNotBefore $CreatedNotBefore -ExpectedVisibility $ExpectedVisibility
+              $ConfirmedNames = @($Confirmed.assets | ForEach-Object { [string]$_.name }) | Sort-Object
+              $ConfirmedIds = @($Confirmed.assets | ForEach-Object { [long]$_.id }) | Sort-Object
+              if (@($Confirmed.assets).Count -ne 2 -or (Compare-Object $ExpectedNames $ConfirmedNames) -or
+                  (Compare-Object $AssetIds $ConfirmedIds) -or
+                  @($Confirmed.assets | Where-Object { [string]$_.state -cne 'uploaded' -or [string]$_.digest -cne $ExpectedDigests[[string]$_.name] }).Count -ne 0) {
+                throw "Owned Release asset identity changed during $Phase."
+              }
+            } finally { if (Test-Path -LiteralPath $RemoteRoot) { Remove-Item -LiteralPath $RemoteRoot -Recurse -Force } }
+          }
+
+          function Restore-OwnedReleaseToPrivateDraft {
+            param(
+              [Parameter(Mandatory = $true)][long]$ReleaseId,
+              [Parameter(Mandatory = $true)][DateTimeOffset]$CreatedAt,
+              [Parameter(Mandatory = $true)][string]$NodeId
+            )
+            function Assert-ImmutableOwnedIdentity($Release) {
+              try {
+                $ObservedCreatedAt = [DateTimeOffset]::Parse([string]$Release.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+              } catch { throw 'Rollback Release created_at is missing or malformed.' }
+              if ([long]$Release.id -ne $ReleaseId -or [string]$Release.node_id -cne $NodeId -or
+                  [string]$Release.author.login -cne 'github-actions[bot]' -or
+                  [string]$Release.url -cne "$ApiBase/releases/$ReleaseId" -or
+                  $ObservedCreatedAt.ToUniversalTime() -ne $CreatedAt.ToUniversalTime()) {
+                throw 'Exact-ID rollback immutable ownership proof failed.'
+              }
+            }
+            $Observations = [Collections.Generic.List[string]]::new()
+            foreach ($Attempt in 1..4) {
+              try {
+                $Current = Get-ReleaseByIdOrNull $ReleaseId
+                if (-not $Current) { throw "Owned Release ID $ReleaseId no longer exists." }
+                Assert-ImmutableOwnedIdentity $Current
+                if ($Current.draft -eq $true) {
+                  $ConfirmedPrivate = Get-ReleaseByIdOrNull $ReleaseId
+                  if (-not $ConfirmedPrivate) { throw "Owned Release ID $ReleaseId disappeared during rollback." }
+                  Assert-ImmutableOwnedIdentity $ConfirmedPrivate
+                  if ($ConfirmedPrivate.draft -ne $true) { throw 'Exact-ID rollback did not remain private.' }
+                  return
+                }
+                $Patched = Invoke-GitHubJsonRequest -Method 'PATCH' -Uri "$ApiBase/releases/$ReleaseId" -ExpectedStatus @(200) -Body @{ draft = $true }
+                Assert-ImmutableOwnedIdentity $Patched
+                if ($Patched.draft -ne $true) { throw 'Exact-ID rollback PATCH did not produce a private draft.' }
+                $ConfirmedPrivate = Get-ReleaseByIdOrNull $ReleaseId
+                if (-not $ConfirmedPrivate) { throw "Owned Release ID $ReleaseId disappeared after rollback." }
+                Assert-ImmutableOwnedIdentity $ConfirmedPrivate
+                if ($ConfirmedPrivate.draft -ne $true) { throw 'Exact-ID rollback was not confirmed private.' }
+                return
+              } catch { $Observations.Add("attempt $Attempt`: $($_.Exception.Message)") }
+              Start-Sleep -Seconds ([Math]::Pow(2, $Attempt - 1))
+            }
+            throw "Could not confirm exact-ID private-draft rollback: $($Observations -join '; ')"
+          }
+
+          Assert-TagOnProtectedMain
+          if (Get-ReleaseByTagOrNull) { throw 'A GitHub Release already exists for this tag.' }
+          $CreationWindowStart = [DateTimeOffset]::UtcNow.AddSeconds(-5)
+          $OwnedReleaseId = $null
+          $OwnedReleaseCreatedAt = $null
+          $OwnedReleaseNodeId = $null
+          try {
+            $Created = $null
+            try {
+              $Created = Invoke-GitHubJsonRequest -Method 'POST' -Uri "$ApiBase/releases" -ExpectedStatus @(201) -Body @{
+                tag_name = $env:RELEASE_TAG
+                target_commitish = $env:SOURCE_COMMIT
+                name = $ExpectedReleaseTitle
+                body = $ExpectedReleaseBody
+                draft = $true
+                prerelease = $false
+                generate_release_notes = $false
+              }
+            } catch {
+              $CreateFailure = $_.Exception.Message
+              $PossibleOwned = $null
+              foreach ($Attempt in 1..4) {
+                $PossibleOwned = Get-ReleaseByTagOrNull
+                if ($PossibleOwned) { break }
+                Start-Sleep -Seconds ([Math]::Pow(2, $Attempt - 1))
+              }
+              if (-not $PossibleOwned) { throw "Release creation response was ambiguous and no exact-marker Release became visible within the bounded ownership window; no remote object will be edited: $CreateFailure" }
+              try {
+                Assert-OwnedRelease -Release $PossibleOwned -ExpectedId ([long]$PossibleOwned.id) -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft'
+              } catch {
+                throw "Release creation is ambiguous and no remote Release will be edited: $CreateFailure; ownership probe: $($_.Exception.Message)"
+              }
+              $Created = $PossibleOwned
+            }
+            $CandidateId = [long]$Created.id
+            Assert-OwnedRelease -Release $Created -ExpectedId $CandidateId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft'
+            try {
+              $OwnedReleaseCreatedAt = [DateTimeOffset]::Parse([string]$Created.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+            } catch { throw 'Owned Release immutable created_at is malformed.' }
+            $OwnedReleaseNodeId = [string]$Created.node_id
+            if ([string]::IsNullOrWhiteSpace($OwnedReleaseNodeId)) { throw 'Owned Release immutable node_id is missing.' }
+            $OwnedReleaseId = $CandidateId
+            Upload-OwnedReleaseAsset -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -FilePath $Archive
+            Upload-OwnedReleaseAsset -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -FilePath $Checksum
+            [void](Get-OwnedRelease -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft')
+            Assert-TagOnProtectedMain
+            Assert-RemoteAssets -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -Phase 'prepublish' -ExpectedVisibility 'draft'
+            Assert-TagOnProtectedMain
+            $Published = Invoke-GitHubJsonRequest -Method 'PATCH' -Uri "$ApiBase/releases/$OwnedReleaseId" -ExpectedStatus @(200) -Body @{ draft = $false }
+            Assert-OwnedRelease -Release $Published -ExpectedId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'public'
+            [void](Get-OwnedRelease -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'public')
+            Assert-TagOnProtectedMain
+            Assert-RemoteAssets -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -Phase 'postpublish' -ExpectedVisibility 'public'
+            Assert-TagOnProtectedMain
+            [void](Get-OwnedRelease -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'public')
+          } catch {
+            $Failure = $_.Exception.Message
+            if ($null -ne $OwnedReleaseId) {
+              try { Restore-OwnedReleaseToPrivateDraft -ReleaseId $OwnedReleaseId -CreatedAt $OwnedReleaseCreatedAt -NodeId $OwnedReleaseNodeId } catch {
+                throw "Publication entered an ambiguous exact-ID state. Original: $Failure. Rollback: $($_.Exception.Message)"
+              }
+              throw "Publication failed and owned Release ID $OwnedReleaseId was confirmed private: $Failure"
+            }
+            throw "Publication failed before exact ownership was established; no remote Release was edited: $Failure"
+          }

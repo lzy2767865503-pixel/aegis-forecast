@@ -15,7 +15,7 @@ if [[ ! -x .venv/bin/python ]]; then
   "$python_command" -m venv .venv
 fi
 
-./.venv/bin/python -m pip install --upgrade "pip==25.3"
+./.venv/bin/python -m pip install --upgrade "pip==26.2.1"
 if [[ "${1:-}" == "--with-moomoo" ]]; then
   ./.venv/bin/python -m pip install -r requirements-moomoo.lock.txt
 else
