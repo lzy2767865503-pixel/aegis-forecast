@@ -476,6 +476,11 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("1366x768 minimum dimensions", native)
         self.assertNotIn('| Remove-AppxPackage', native)
         self.assertNotIn('| Stop-Process', native)
+        pass1 = (root / "scripts/windows/verify-pass1.ps1").read_text(encoding="utf-8")
+        self.assertIn('$env:PYTHONUTF8 = "1"', pass1)
+        self.assertIn('$env:PYTHONIOENCODING = "utf-8"', pass1)
+        self.assertIn('value = $PreviousPythonUtf8', pass1)
+        self.assertIn('value = $PreviousPythonIoEncoding', pass1)
         screenshot = (
             root / "scripts/windows/prepare-store-listing-screenshot.ps1"
         ).read_text(encoding="utf-8")
