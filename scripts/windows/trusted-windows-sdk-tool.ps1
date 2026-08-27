@@ -34,7 +34,13 @@ function Assert-AegisTrustedMicrosoftTool {
         [Parameter(Mandatory = $true)][string]$Label
     )
     $ExactKitsRoot = [IO.Path]::GetFullPath($WindowsKitsRoot).TrimEnd("\")
-    $Current = $Tool
+    $ToolPath = [IO.Path]::GetFullPath($Tool.FullName)
+    if (($Tool.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label path contains a reparse point: $ToolPath"
+    }
+    # FileInfo does not expose Parent. Start the ancestor walk at its
+    # DirectoryInfo so the same fail-closed reparse check works in PowerShell 7.
+    $Current = $Tool.Directory
     $ReachedRoot = $false
     while ($Current) {
         $CurrentPath = [IO.Path]::GetFullPath($Current.FullName).TrimEnd("\")
