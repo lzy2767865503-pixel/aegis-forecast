@@ -105,6 +105,27 @@ class AuditAndRuntimeTests(unittest.TestCase):
             )
         self.assertFalse(ledger.verify()["valid"])
 
+    def test_database_contexts_close_connections(self) -> None:
+        ledger = AuditLedger(self.database)
+        with ledger.connect() as audit_connection:
+            self.assertEqual(
+                audit_connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
+                0,
+            )
+        with self.assertRaises(sqlite3.ProgrammingError):
+            audit_connection.execute("SELECT 1")
+
+        registry = ScenarioIntegrityRegistry(self.database, audit=ledger)
+        with registry.connect() as integrity_connection:
+            self.assertEqual(
+                integrity_connection.execute(
+                    "SELECT COUNT(*) FROM scenario_integrity_checks"
+                ).fetchone()[0],
+                0,
+            )
+        with self.assertRaises(sqlite3.ProgrammingError):
+            integrity_connection.execute("SELECT 1")
+
     def test_store_simulation_execution_cannot_be_enabled_by_environment(self) -> None:
         previous = os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
         try:
