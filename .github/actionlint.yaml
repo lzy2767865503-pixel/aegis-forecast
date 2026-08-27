@@ -3,6 +3,8 @@ self-hosted-runner:
   # Windows App Certification Kit UI automation is never attempted in session 0.
   labels:
     - wack-interactive
+    - aegis-release-build
+    - aegis-release-signer
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.

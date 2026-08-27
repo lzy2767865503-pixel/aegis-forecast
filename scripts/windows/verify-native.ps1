@@ -122,6 +122,61 @@ function Test-NativeTreeHasReparsePoint([string]$Root) {
     return @(Get-ChildItem -LiteralPath $Root -Force -Recurse -ErrorAction Stop | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0
 }
 
+function Read-UInt32BigEndian([byte[]]$Bytes, [int]$Offset) {
+    if ($Offset -lt 0 -or $Offset + 4 -gt $Bytes.Length) { throw "PNG integer is outside the file boundary." }
+    return [uint32]((([uint64]$Bytes[$Offset]) -shl 24) -bor
+        (([uint64]$Bytes[$Offset + 1]) -shl 16) -bor
+        (([uint64]$Bytes[$Offset + 2]) -shl 8) -bor
+        ([uint64]$Bytes[$Offset + 3]))
+}
+
+function Get-ValidatedStoreScreenshot([string]$Path) {
+    $Item = Get-Item -LiteralPath $Path -Force
+    if ($Item.Length -lt 10000 -or $Item.Length -gt 20MB -or
+        ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Store listing screenshot size or file boundary is invalid."
+    }
+    [byte[]]$Bytes = [IO.File]::ReadAllBytes($Item.FullName)
+    if ($Bytes.Length -lt 45 -or [Convert]::ToHexString($Bytes[0..7]) -cne '89504E470D0A1A0A') {
+        throw "Store listing screenshot is not a canonical PNG stream."
+    }
+    $AllowedChunks = @('IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'cHRM', 'gAMA', 'sBIT', 'sRGB', 'bKGD', 'hIST', 'pHYs')
+    $Position = 8
+    $Chunks = [Collections.Generic.List[string]]::new()
+    $Width = 0
+    $Height = 0
+    while ($Position -lt $Bytes.Length) {
+        if ($Position + 12 -gt $Bytes.Length) { throw "PNG chunk header is truncated." }
+        $Length = [long](Read-UInt32BigEndian $Bytes $Position)
+        $Type = [Text.Encoding]::ASCII.GetString($Bytes, $Position + 4, 4)
+        if ($Type -cnotmatch '^[A-Za-z]{4}$' -or $Type -cnotin $AllowedChunks -or
+            $Length -gt 20MB -or $Position + 12 + $Length -gt $Bytes.Length) {
+            throw "PNG contains an unknown, metadata-bearing, or out-of-bound chunk."
+        }
+        $Chunks.Add($Type)
+        if ($Chunks.Count -eq 1) {
+            if ($Type -cne 'IHDR' -or $Length -ne 13) { throw "PNG must start with one exact IHDR chunk." }
+            $Width = [int](Read-UInt32BigEndian $Bytes ($Position + 8))
+            $Height = [int](Read-UInt32BigEndian $Bytes ($Position + 12))
+        } elseif ($Type -ceq 'IHDR') { throw "PNG contains more than one IHDR chunk." }
+        $Position += 12 + [int]$Length
+        if ($Type -ceq 'IEND') {
+            if ($Length -ne 0 -or $Position -ne $Bytes.Length) { throw "PNG IEND is not exact and terminal." }
+            break
+        }
+    }
+    if ($Chunks.Count -lt 3 -or $Chunks[$Chunks.Count - 1] -cne 'IEND' -or
+        @($Chunks | Where-Object { $_ -ceq 'IDAT' }).Count -lt 1 -or
+        $Width -lt 1366 -or $Height -lt 768 -or $Width -gt 4096 -or $Height -gt 2160) {
+        throw "PNG structure or 1366x768 minimum dimensions are invalid."
+    }
+    return [pscustomobject]@{
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Item.FullName).Hash.ToLowerInvariant()
+        width = $Width
+        height = $Height
+    }
+}
+
 function Capture-NativeOwnedObjects {
     if (-not $PackageInstallAttempted) { return }
     foreach ($Package in @(Get-AppxPackage -Name $Candidate.packageIdentity -ErrorAction SilentlyContinue)) {
@@ -329,6 +384,75 @@ try {
     if ([System.IO.Path]::GetFullPath([string]$Marker.installLocation).TrimEnd("\") -ne $InstallLocation) { throw "DOM marker install location differs from Get-AppxPackage." }
     if ([System.IO.Path]::GetFullPath([string]$Marker.dataRoot).TrimEnd("\") -ne [System.IO.Path]::GetFullPath($LocalState).TrimEnd("\") -or $Marker.dataRootBinding -cne "PFN:$InstalledFamilyName") { throw "DOM marker data-root binding differs from the installed PFN LocalState." }
 
+    $ExpectedScreenshots = @(
+        [ordered]@{ fileName = 'store-listing-home.png'; view = 'home'; heading = 'Nasdaq-100 说明性合成情景' },
+        [ordered]@{ fileName = 'store-listing-scenarios.png'; view = 'scenarios'; heading = 'Nasdaq-100 研究排名' },
+        [ordered]@{ fileName = 'store-listing-privacy.png'; view = 'privacy'; heading = '隐私与本地数据' },
+        [ordered]@{ fileName = 'store-listing-about.png'; view = 'about'; heading = '关于 Quant Scenario Studio' }
+    )
+    $MarkerScreenshots = @($Marker.storeListingScreenshots)
+    if ([int]$Marker.storeListingScreenshotCount -ne 4 -or $MarkerScreenshots.Count -ne 4 -or
+        [string]$Marker.storeListingScreenshotFile -cne 'store-listing-home.png' -or
+        [string]$Marker.storeListingScreenshotView -cne 'home' -or -not $Marker.storeListingScreenshotPrivacyValidated) {
+        throw "DOM marker does not contain the exact four privacy-validated Store screenshot views."
+    }
+    $ScreenshotSummaryRows = [Collections.Generic.List[object]]::new()
+    $SeenScreenshotHashes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $ScreenshotWidth = $null
+    $ScreenshotHeight = $null
+    for ($ScreenshotIndex = 0; $ScreenshotIndex -lt $ExpectedScreenshots.Count; $ScreenshotIndex++) {
+        $ExpectedScreenshot = $ExpectedScreenshots[$ScreenshotIndex]
+        $MarkerScreenshot = $MarkerScreenshots[$ScreenshotIndex]
+        $Keys = @($MarkerScreenshot.PSObject.Properties.Name | Sort-Object)
+        if (($Keys -join '|') -cne 'fileName|heading|height|privacyValidated|sha256|view|width' -or
+            [string]$MarkerScreenshot.fileName -cne [string]$ExpectedScreenshot.fileName -or
+            [string]$MarkerScreenshot.view -cne [string]$ExpectedScreenshot.view -or
+            [string]$MarkerScreenshot.heading -cne [string]$ExpectedScreenshot.heading -or
+            [string]$MarkerScreenshot.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            -not $MarkerScreenshot.privacyValidated -or -not $SeenScreenshotHashes.Add([string]$MarkerScreenshot.sha256)) {
+            throw "DOM marker Store screenshot inventory is missing, duplicated, or malformed."
+        }
+        $ScreenshotPath = Join-Path $Runtime ([string]$MarkerScreenshot.fileName)
+        if ([IO.Path]::GetFullPath($ScreenshotPath) -cne [IO.Path]::GetFullPath((Join-Path $Runtime ([string]$ExpectedScreenshot.fileName)))) {
+            throw "Store screenshot path escaped the exact candidate runtime directory."
+        }
+        $CurrentScreenshotEvidence = Get-ValidatedStoreScreenshot -Path $ScreenshotPath
+        if ($CurrentScreenshotEvidence.sha256 -cne [string]$MarkerScreenshot.sha256 -or
+            [int]$CurrentScreenshotEvidence.width -ne [int]$MarkerScreenshot.width -or
+            [int]$CurrentScreenshotEvidence.height -ne [int]$MarkerScreenshot.height) {
+            throw "Store listing screenshot bytes/dimensions differ from the exact candidate marker."
+        }
+        if ($null -eq $ScreenshotWidth) {
+            $ScreenshotWidth = [int]$CurrentScreenshotEvidence.width
+            $ScreenshotHeight = [int]$CurrentScreenshotEvidence.height
+        } elseif ([int]$CurrentScreenshotEvidence.width -ne $ScreenshotWidth -or [int]$CurrentScreenshotEvidence.height -ne $ScreenshotHeight) {
+            throw "Four Store screenshot views must have identical controlled dimensions."
+        }
+        $EvidenceScreenshot = Join-Path $EvidenceRoot ([string]$ExpectedScreenshot.fileName)
+        Copy-Item -LiteralPath $ScreenshotPath -Destination $EvidenceScreenshot
+        $CopiedScreenshotEvidence = Get-ValidatedStoreScreenshot -Path $EvidenceScreenshot
+        if ($CopiedScreenshotEvidence.sha256 -cne $CurrentScreenshotEvidence.sha256 -or
+            $CopiedScreenshotEvidence.width -ne $CurrentScreenshotEvidence.width -or
+            $CopiedScreenshotEvidence.height -ne $CurrentScreenshotEvidence.height) {
+            throw "Store listing screenshot evidence copy changed."
+        }
+        $ScreenshotSummaryRows.Add([ordered]@{
+            fileName = [string]$ExpectedScreenshot.fileName
+            sha256 = [string]$CurrentScreenshotEvidence.sha256
+            width = [int]$CurrentScreenshotEvidence.width
+            height = [int]$CurrentScreenshotEvidence.height
+            view = [string]$ExpectedScreenshot.view
+            heading = [string]$ExpectedScreenshot.heading
+            privacyValidated = $true
+        })
+    }
+    $ScreenshotEvidence = $ScreenshotSummaryRows[0]
+    if ($Marker.storeListingScreenshotSha256 -cne $ScreenshotEvidence.sha256 -or
+        [int]$Marker.storeListingScreenshotWidth -ne $ScreenshotEvidence.width -or
+        [int]$Marker.storeListingScreenshotHeight -ne $ScreenshotEvidence.height) {
+        throw "Legacy home screenshot marker does not bind the first exact screenshot row."
+    }
+
     $ShellProcessId = [int]$Marker.shellProcessId
     $BackendProcessId = [int]$Marker.backendProcessId
     if ($ShellProcessId -le 0 -or $BackendProcessId -le 0 -or $ShellProcessId -eq $BackendProcessId) { throw "DOM marker process IDs are invalid." }
@@ -408,8 +532,16 @@ try {
         pfnAndLocalStateAbsentAfterUninstall = $true
         fallbackLocalStateAbsentAfterUninstall = $true
         markerBoundLocalStateValidated = $true
+        storeListingScreenshotFile = 'store-listing-home.png'
+        storeListingScreenshotSha256 = $ScreenshotEvidence.sha256
+        storeListingScreenshotWidth = [int]$ScreenshotEvidence.width
+        storeListingScreenshotHeight = [int]$ScreenshotEvidence.height
+        storeListingScreenshotView = 'home'
+        storeListingScreenshotPrivacyValidated = $true
+        storeListingScreenshotCount = 4
+        storeListingScreenshots = @($ScreenshotSummaryRows)
         capturedAt = [DateTimeOffset]::UtcNow.ToString("o")
-    } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $EvidenceRoot "lifecycle-dom-api-uninstall.json")
+    } | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $EvidenceRoot "lifecycle-dom-api-uninstall.json")
 } catch {
     $PrimaryFailure = $_.Exception
 } finally {

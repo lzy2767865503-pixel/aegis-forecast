@@ -70,9 +70,18 @@ def main() -> None:
                 local = child.tag.rsplit("}", 1)[-1]
                 if local in {"license", "licenseUrl", "projectUrl", "copyright"} and (child.text or "").strip():
                     license_values.append(f"{local}: {(child.text or '').strip()}")
+        if not license_values:
+            raise RuntimeError(
+                f"NuGet package has no non-empty upstream license declaration: {name} {version}"
+            )
         declaration = destination / "UPSTREAM-LICENSE-DECLARATION.txt"
         declaration.write_text("\n".join(license_values) + "\n", encoding="utf-8")
         copied.append(declaration)
+        empty_files = [path.name for path in copied if path.stat().st_size <= 0]
+        if empty_files:
+            raise RuntimeError(
+                f"NuGet legal evidence contains empty files for {name} {version}: {empty_files}"
+            )
         records.append(
             {
                 "ecosystem": "nuget",

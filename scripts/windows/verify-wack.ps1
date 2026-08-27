@@ -535,7 +535,7 @@ try {
         if ($Written -lt $RunStartedAt.AddSeconds(-2) -or $Written -gt $RunFinishedAt.AddMinutes(1)) { throw "WACK evidence is stale or has an impossible timestamp: $FreshFile" }
     }
 
-    $ResultValues = @(Read-AegisCompleteWackReport $Report)
+    $ParsedReport = Read-AegisCompleteWackReport -Path $Report -ApprovedVersion $ApprovedWackFileVersion
     Capture-WackReportOwnedLocation
 
     # AppCert may intentionally leave its package or app process behind. Clean
@@ -565,7 +565,7 @@ try {
 
     $PackageHashAfter = Assert-CandidateBytes "completion"
     [ordered]@{
-        schemaVersion = 3
+        schemaVersion = 4
         wackRound = $WackRound
         product = $Candidate.product
         author = $Candidate.author
@@ -587,12 +587,21 @@ try {
         reportSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Report).Hash.ToLowerInvariant()
         powershellTranscriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PowerShellTranscript).Hash.ToLowerInvariant()
         appcertConsoleSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $AppCertLog).Hash.ToLowerInvariant()
-        resultCount = $ResultValues.Count
-        overallResults = @($ResultValues)
+        resultCount = @($ParsedReport.overallResults).Count
+        overallResults = @($ParsedReport.overallResults)
+        testCount = [int]$ParsedReport.testCount
+        testInventorySha256 = [string]$ParsedReport.testInventorySha256
+        reportLatestVersion = [bool]$ParsedReport.latestVersion
+        reportVersion = [string]$ParsedReport.reportVersion
         hardTimeoutEnforced = $true
         interactiveSessionId = $CurrentSessionId
         elevatedAdministrator = [bool]$RunnerPolicy.elevatedAdministrator
+        approvedWackFileVersion = $ApprovedWackFileVersion
         wackFileVersion = [string]$RunnerPolicy.fileVersion
+        appcertProductVersion = [string]$RunnerPolicy.productVersion
+        appcertSha256 = [string]$RunnerPolicy.appCertSha256
+        appcertSignerThumbprint = [string]$RunnerPolicy.appCertSignerThumbprint
+        appcertTimestampThumbprint = [string]$RunnerPolicy.appCertTimestampThumbprint
         noRuntimeResidue = $true
         capturedAt = [DateTimeOffset]::UtcNow.ToString("o")
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $ReportRoot "wack-summary.json")

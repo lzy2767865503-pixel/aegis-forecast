@@ -116,8 +116,20 @@ function Get-AegisTrustedWindowsAppCertificationKit {
     if ($InstalledFileVersion -cne $ApprovedFileVersion) {
         throw "Installed AppCert file version $InstalledFileVersion differs from approved version $ApprovedFileVersion."
     }
+    $TrustedPath = Assert-AegisTrustedMicrosoftTool -Tool $Tool -WindowsKitsRoot $WindowsKitsRoot -Label "appcert.exe"
+    $Signature = Get-AuthenticodeSignature -LiteralPath $TrustedPath
+    $Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $TrustedPath).Hash.ToLowerInvariant()
+    $ProductVersion = [string]$Tool.VersionInfo.ProductVersion
+    if ($Sha256 -cnotmatch '^[0-9a-f]{64}$' -or [string]::IsNullOrWhiteSpace($ProductVersion) -or
+        -not $Signature.SignerCertificate -or -not $Signature.TimeStamperCertificate) {
+        throw "Approved AppCert tool version/hash/signature evidence is incomplete."
+    }
     return [pscustomobject]@{
-        path = Assert-AegisTrustedMicrosoftTool -Tool $Tool -WindowsKitsRoot $WindowsKitsRoot -Label "appcert.exe"
+        path = $TrustedPath
         fileVersion = $InstalledFileVersion
+        productVersion = $ProductVersion
+        sha256 = $Sha256
+        signerThumbprint = $Signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+        timestampThumbprint = $Signature.TimeStamperCertificate.Thumbprint.ToLowerInvariant()
     }
 }

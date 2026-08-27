@@ -118,7 +118,24 @@ Do not enter a branch-only or inaccessible privacy URL in Partner Center.
 
 ## Screenshot plan
 
-Capture on the exact signed-development candidate at 100% Windows scaling:
+The repository image `docs/assets/dashboard-demo.png` is a documentation-only
+concept/demo image and must never be submitted or cited as Store acceptance
+evidence.
+
+The protected Windows Store workflow captures four different real views
+(home, scenario ranking, privacy and About) directly through the exact installed
+signed-development candidate's WebView2 at 100% Windows scaling. Both native QA
+rounds must independently produce four distinct metadata-free PNGs of at least
+1366x768, bound to the candidate SHA-256 and source commit. Only round 2 is
+staged as four exact files under `artifacts/store-listing-public/`; after all
+certificate/private-work-product cleanup those four PNGs are the sole files in
+the Actions artifact `aegis-store-listing-screenshot-<run-id>-<run-attempt>`.
+No MSIX, unsigned submission, certificate, WACK report or private lineage JSON
+enters that artifact. Until that protected Windows run succeeds, the final Store
+screenshots are explicitly **not ready**.
+
+Any additional listing views, if later captured manually, must come from the same
+exact verified candidate at 100% Windows scaling:
 
 1. Home with the prominent deterministic-synthetic/non-market-data label.
 2. Research detail with neutral confirmation/invalidation thresholds.

@@ -23,7 +23,13 @@ identity expected from Partner Center: **LAI ZEYU**.
    the same original unsigned-submission/payload-tree lineage.
 5. Open the privacy URL while signed out and compare every listing claim with
    the installed candidate.
-6. Pre-provision a directory named exactly `AegisStoreHandoff` on a local fixed
+6. Require the protected workflow's four-file Store screenshot artifact. Its
+   distinct home/scenario/privacy/About views are captured by the exact installed
+   candidate only after nonce-bound DOM/API validation, each must be at least
+   1366x768, and the PNGs are uploaded only after certificate and private
+   build/WACK evidence cleanup. `docs/assets/dashboard-demo.png` is documentation
+   artwork, not Store evidence.
+7. Pre-provision a directory named exactly `AegisStoreHandoff` on a local fixed
    NTFS volume outside the checkout, runner temp and every OneDrive root. Disable
    inherited permissions and grant FullControl only to the exact Windows account
    running Actions, `SYSTEM`, and local `Administrators`; set its absolute path

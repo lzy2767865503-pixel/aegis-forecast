@@ -30,6 +30,10 @@ function Assert-AegisWackRunner {
     return [pscustomobject]@{
         appCertPath = [IO.Path]::GetFullPath($AppCert)
         fileVersion = $InstalledFileVersion
+        productVersion = [string]$TrustedKit.productVersion
+        appCertSha256 = [string]$TrustedKit.sha256
+        appCertSignerThumbprint = [string]$TrustedKit.signerThumbprint
+        appCertTimestampThumbprint = [string]$TrustedKit.timestampThumbprint
         sessionId = $SessionId
         elevatedAdministrator = $true
     }

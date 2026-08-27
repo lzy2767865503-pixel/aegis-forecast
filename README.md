@@ -17,7 +17,7 @@ Center's non-visible package Name is injected only after reservation, and its
 technical Publisher is this account's GUID-form CN—not an author signature. The
 repository and internal engine retain the historical name **Aegis Forecast**.
 
-![Synthetic-data dashboard](docs/assets/dashboard-demo.png)
+![Synthetic-data dashboard concept (documentation only; not Store acceptance evidence)](docs/assets/dashboard-demo.png)
 
 ## Store boundary
 
@@ -114,12 +114,20 @@ the upstream dependency license inventory.
   pre-provisioned local fixed-NTFS handoff root on that runner; the QA copy,
   certificate and detailed evidence are deleted and no Store package is ever
   uploaded to GitHub.
-- GitHub distribution is a separate portable ZIP. The protected manual workflow
-  gives the checkout/sign/test job read-only repository permission. After CKA
-  unload, certificate removal and hash-bound silent uninstall, it hands only the tested ZIP/checksum to a separate write-only,
+- GitHub distribution is a separate portable ZIP. A protected build account
+  checks out and builds unsigned bytes without signing secrets, then atomically
+  hands them to a different no-checkout signer account on the same machine
+  through a local fixed-NTFS exact-ACL directory. The signer accepts only a
+  pre-administered hash/Authenticode-bound orchestrator whose credential
+  transport is `ENVIRONMENT_ONLY_NO_ARGV`; repository-managed CKA bootstrap is
+  fail-closed because its vendor CLI would expose credentials in argv. Only
+  after receipt-bound certificate/CNG-provider/private-key cleanup does a signed
+  ZIP/checksum leave that account for hosted two-pass QA and the separate
   no-checkout publisher. Every recursively discovered PE must have exactly one
   SHA-256/RFC 3161 signature index from the same publicly trusted signer whose
   SimpleName is exactly `LAI ZEYU` or `来泽宇`. The publisher uses a unique
-  per-run marker and exact Release ID for upload/publication, re-downloads and
-  revalidates private and public bytes, and restores only its immutable
-  ID/node-ID/creation-time-bound object to draft if any later gate fails.
+  per-run marker, but ownership comes only from the immutable ID/node-ID/creation
+  time in one successful HTTP 201 response. Any ambiguous creation response is
+  diagnostic-only: no Release is queried, adopted or mutated. Assets,
+  publication and rollback use only that exact ID; rollback never depends on a
+  mutable title or body.

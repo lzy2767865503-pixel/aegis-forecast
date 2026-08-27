@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build-and-verify-one-candidate:
-    name: Build once, QA twice, WACK twice, retain unsigned handoff privately
+    name: Build once, QA twice, WACK twice, retain unsigned privately, export four exact screenshots
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
@@ -72,10 +72,12 @@ jobs:
           $Excludes = @($Ruleset.conditions.ref_name.exclude)
           $RuleTypes = @($Ruleset.rules | ForEach-Object type | Sort-Object)
           $PullRequestRules = @($Ruleset.rules | Where-Object type -ceq 'pull_request')
+          $StatusCheckRules = @($Ruleset.rules | Where-Object type -ceq 'required_status_checks')
           if ($LASTEXITCODE -ne 0 -or [long]$Ruleset.id -ne 21633557 -or $Ruleset.enforcement -cne 'active' -or
               $Ruleset.target -cne 'branch' -or @($Ruleset.bypass_actors).Count -ne 0 -or
               ($Includes -join '|') -cne 'refs/heads/main' -or $Excludes.Count -ne 0 -or
-              ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or $PullRequestRules.Count -ne 1) {
+              ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks' -or
+              $PullRequestRules.Count -ne 1 -or $StatusCheckRules.Count -ne 1) {
             throw 'The active no-bypass main lineage ruleset is not exact.'
           }
           $Parameters = $PullRequestRules[0].parameters
@@ -92,6 +94,19 @@ jobs:
               $Parameters.require_last_push_approval -or [int]$Parameters.required_approving_review_count -ne 0 -or
               @($Parameters.required_reviewers).Count -ne 0) {
             throw 'The exact main pull-request/review-thread-resolution policy drifted.'
+          }
+          $StatusParameters = $StatusCheckRules[0].parameters
+          $StatusParameterKeys = @($StatusParameters.PSObject.Properties.Name | Sort-Object)
+          $ExpectedStatusParameterKeys = @('do_not_enforce_on_create', 'required_status_checks', 'strict_required_status_checks_policy') | Sort-Object
+          $Checks = @($StatusParameters.required_status_checks)
+          $CheckContexts = @($Checks | ForEach-Object { [string]$_.context } | Sort-Object)
+          $ExpectedContexts = @('verify (3.10)', 'verify (3.12)') | Sort-Object
+          if (($StatusParameterKeys -join '|') -cne ($ExpectedStatusParameterKeys -join '|') -or
+              -not $StatusParameters.strict_required_status_checks_policy -or $StatusParameters.do_not_enforce_on_create -or
+              $Checks.Count -ne 2 -or ($CheckContexts -join '|') -cne ($ExpectedContexts -join '|') -or
+              @($Checks | Where-Object { [long]$_.integration_id -ne 15368 }).Count -ne 0 -or
+              @($Checks | Where-Object { (@($_.PSObject.Properties.Name | Sort-Object) -join '|') -cne 'context|integration_id' }).Count -ne 0) {
+            throw 'The exact strict GitHub Actions required-status-check policy drifted.'
           }
           . ./scripts/windows/wack-runner-policy.ps1
           [void](Assert-AegisWackRunner -ApprovedFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION)
@@ -185,6 +200,10 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/generate-release-metadata.ps1
 
+      - name: Prepare only four privacy-validated exact-candidate Store screenshots
+        shell: pwsh
+        run: ./scripts/windows/prepare-store-listing-screenshot.ps1
+
       - name: Prepare the unsigned Partner Center handoff from the verified lineage
         shell: pwsh
         run: ./scripts/windows/prepare-store-handoff.ps1
@@ -269,3 +288,42 @@ jobs:
             } catch { $Errors.Add("$Relative`: $($_.Exception.Message)") }
           }
           if ($Errors.Count -ne 0) { throw "Store work-product cleanup failures: $($Errors -join ' | ')" }
+
+      - name: Revalidate the exact four screenshot hashes after all private cleanup
+        shell: pwsh
+        run: ./scripts/windows/prepare-store-listing-screenshot.ps1 -ValidatePublicOnly
+
+      - name: Upload only four exact-candidate Store listing PNGs after private cleanup
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-store-listing-screenshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-01-Home.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-02-Scenarios.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-03-Privacy.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-04-About.png
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Remove the exact public screenshot staging after upload
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Artifacts = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts')).TrimEnd('\') + '\'
+          $Target = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts\store-listing-public'))
+          if (-not $Target.StartsWith($Artifacts, [StringComparison]::OrdinalIgnoreCase) -or
+              [IO.Path]::GetFileName($Target) -cne 'store-listing-public') {
+            throw 'Public screenshot cleanup escaped the exact artifacts child.'
+          }
+          if (Test-Path -LiteralPath $Target) {
+            $Entries = @((Get-Item -LiteralPath $Target -Force); Get-ChildItem -LiteralPath $Target -Force -Recurse)
+            if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Public screenshot cleanup tree contains a reparse point.'
+            }
+            Remove-Item -LiteralPath $Target -Recurse -Force
+          }
+          if (Test-Path -LiteralPath $Target) { throw 'Public screenshot staging remained after upload.' }

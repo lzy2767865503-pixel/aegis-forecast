@@ -85,13 +85,19 @@ embedded executable/archive/certificate/secret encodings, and writes only a
 fixed Job Summary.
 
 GitHub distribution is a separate portable ZIP, never the Store MSIX. A
-protected manual workflow uses the pinned SSL.com eSigner CKA/KSP with Microsoft
-SignTool to timestamp-sign every recursively discovered PE whose signer
-SimpleName is exactly `LAI ZEYU` or `来泽宇`. It verifies online signer and
-timestamp chains, runs two same-byte portable lifecycles, uploads a draft,
-downloads and revalidates it, removes the temporary signer, then publishes.
-The workflow then re-downloads the public release and closes the loop over exact
-asset hashes/signatures, tag immutability and current remote-main ancestry.
+protected build runner/account has no signing secrets and freezes unsigned bytes
+into a same-host local fixed-NTFS exact-ACL handoff. A different no-checkout
+runner/account may sign them only through a pre-administered hash- and
+Authenticode-bound orchestrator that consumes secrets from the environment and
+attests that no credential entered argv. Repository CKA setup/cleanup scripts
+are intentionally blocked. The signer receipt must prove certificate-store,
+CNG-provider and private-key baselines are restored before signed bytes are
+uploaded for two unchanged-byte hosted lifecycle passes.
+The publisher accepts ownership only from one HTTP 201 response carrying the
+immutable Release ID, node ID and creation time. A non-201, exception or malformed
+response triggers no lookup/adoption/mutation. It then re-downloads the public
+release and closes the loop over exact-ID asset hashes/signatures, tag
+immutability and current remote-main ancestry.
 
 Partner Center identity reservation, public privacy URL, final visual/accessibility
 review and Microsoft Store signing remain release-time inputs. A development

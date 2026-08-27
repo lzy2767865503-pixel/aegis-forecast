@@ -281,7 +281,16 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertEqual(workflow.count("Strict WACK round"), 2)
         self.assertEqual(workflow.count("-WackRound"), 2)
         self.assertIn("prepare-store-handoff.ps1", workflow)
-        self.assertNotIn("actions/upload-artifact", workflow)
+        self.assertEqual(workflow.count("actions/upload-artifact"), 1)
+        self.assertIn("prepare-store-listing-screenshot.ps1", workflow)
+        self.assertEqual(workflow.count("artifacts/store-listing-public/Quant-Scenario-Studio-Store-0"), 4)
+        screenshot_upload = workflow.split("Upload only four exact-candidate Store listing PNGs", 1)[1]
+        self.assertNotIn(".msix", screenshot_upload.lower())
+        self.assertIn("-ValidatePublicOnly", workflow)
+        self.assertLess(
+            workflow.index("-ValidatePublicOnly"),
+            workflow.index("Upload only four exact-candidate Store listing PNGs"),
+        )
         self.assertIn("retain-private-store-handoff.ps1", workflow)
         self.assertIn("AEGIS_PRIVATE_STORE_HANDOFF_ROOT", workflow)
         self.assertNotIn(
@@ -301,6 +310,9 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("AEGIS_APPROVED_WACK_FILE_VERSION", workflow)
+        self.assertIn("required_status_checks", workflow)
+        self.assertIn("integration_id -ne 15368", workflow)
+        self.assertIn("'verify (3.10)', 'verify (3.12)'", workflow)
         self.assertLess(
             workflow.index("Require trusted main, reserved Partner identity"),
             workflow.index("actions/setup-python@"),
@@ -339,11 +351,28 @@ class StorePackageBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn(".msix", release.lower())
         self.assertEqual(release.count("Signed same-byte portable lifecycle round"), 2)
-        self.assertIn("setup-esigner-cka.ps1", release)
         self.assertIn("persist-credentials: false", release)
         self.assertIn("permissions:\n  contents: read", release)
-        self.assertIn("sign-and-test:", release)
+        self.assertIn("build-private-unsigned:", release)
+        self.assertIn("sign-private-no-checkout:", release)
+        self.assertIn("verify-signed:", release)
         self.assertIn("publish-release:", release)
+        build_job = release.split("  build-private-unsigned:", 1)[1].split(
+            "  sign-private-no-checkout:", 1
+        )[0]
+        signer_job = release.split("  sign-private-no-checkout:", 1)[1].split(
+            "  verify-signed:", 1
+        )[0]
+        self.assertNotIn("secrets.", build_job)
+        self.assertNotIn("actions/upload-artifact", build_job)
+        self.assertIn("retain-private-signing-handoff.ps1", build_job)
+        self.assertNotIn("actions/checkout", signer_job)
+        self.assertIn("ENVIRONMENT_ONLY_NO_ARGV", signer_job)
+        self.assertIn("credentialsPassedInArgv", signer_job)
+        self.assertIn("cngProviderBaselineRestored", signer_job)
+        self.assertIn("privateKeyBaselineRestored", signer_job)
+        self.assertIn("deleteKeyAttempted", signer_job)
+        self.assertIn("machineGuidSha256", signer_job)
         publisher = release.split("  publish-release:", 1)[1]
         self.assertNotIn("actions/checkout", publisher)
         self.assertIn("contents: write", publisher)
@@ -354,6 +383,9 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("Restore-OwnedReleaseToPrivateDraft", release)
         self.assertIn("Exact-ID rollback immutable ownership proof failed", release)
         self.assertIn("OwnedReleaseNodeId", release)
+        self.assertIn("one successful HTTP 201 response", publisher)
+        self.assertIn("no Release lookup, adoption, PATCH, upload or", publisher)
+        self.assertNotIn("$PossibleOwned", publisher)
         self.assertIn("Exact-ID asset upload", release)
         self.assertIn("-Phase 'postpublish'", release)
         self.assertIn("PE must have exactly one primary signer", publisher)
@@ -365,6 +397,9 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", release)
         self.assertIn("Assert-TagOnProtectedMain", publisher)
         self.assertIn("Assert-RemoteAssets", publisher)
+        self.assertGreaterEqual(release.count("required_status_checks"), 3)
+        self.assertGreaterEqual(release.count("integration_id -ne 15368"), 3)
+        self.assertGreaterEqual(release.count("verify (3.10)|verify (3.12)"), 3)
 
     def test_windows_scripts_fail_closed_and_embed_source_hash_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -393,8 +428,28 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("creationTimeUtcTicks", native)
         self.assertIn("Capture-NativeOwnedObjects", native)
         self.assertIn("Native QA verification/cleanup failures", native)
+        self.assertIn("Get-ValidatedStoreScreenshot", native)
+        self.assertIn("storeListingScreenshotPrivacyValidated", native)
+        self.assertIn("storeListingScreenshotCount = 4", native)
+        self.assertIn("1366x768 minimum dimensions", native)
         self.assertNotIn('| Remove-AppxPackage', native)
         self.assertNotIn('| Stop-Process', native)
+        screenshot = (
+            root / "scripts/windows/prepare-store-listing-screenshot.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("twice-QA/twice-WACK candidate lineage", screenshot)
+        self.assertIn("metadata-bearing", screenshot)
+        self.assertIn("Post-cleanup four-PNG", screenshot)
+        self.assertIn("artifacts\\store-listing-public", screenshot)
+        self.assertIn("four distinct exact-candidate views", screenshot)
+        self.assertNotIn("docs/assets/dashboard-demo.png", screenshot)
+        shell = (
+            root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CapturePreviewAsync", shell)
+        self.assertIn("GetDpiForWindow(window) != 96", shell)
+        self.assertIn("storeListingScreenshotPrivacyValidated = true", shell)
+        self.assertIn("screenshots.Count != 4", shell)
         wack = (root / "scripts/windows/verify-wack.ps1").read_text(encoding="utf-8")
         self.assertIn("powershell-transcript.log", wack)
         self.assertIn('Assert-CandidateBytes "completion"', wack)
@@ -407,20 +462,33 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("approved AppCert executable is already running", wack)
         self.assertIn("creationTimeUtcTicks", wack)
         self.assertIn("WACK verification/cleanup failures", wack)
+        self.assertIn("approvedWackFileVersion", wack)
+        self.assertIn("appcertSha256", wack)
+        self.assertIn("testInventorySha256", wack)
         self.assertNotIn("Preflight proved that none", wack)
+        wack_policy = (root / "scripts/windows/wack-report-policy.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('GetAttribute("LATEST_VERSION")', wack_policy)
+        self.assertIn('GetAttribute("VERSION")', wack_policy)
+        self.assertIn("WACK TEST INDEX and NAME values must each be unique", wack_policy)
+        self.assertIn("testInventorySha256", wack_policy)
         cka_setup = (root / "scripts/windows/setup-esigner-cka.ps1").read_text(
             encoding="utf-8"
         )
         cka_cleanup = (root / "scripts/windows/cleanup-esigner-cka.ps1").read_text(
             encoding="utf-8"
         )
-        self.assertIn("ownedSignerThumbprints", cka_setup)
-        self.assertIn("PreexistingMySet", cka_setup)
-        self.assertIn("SSL.com CKA helper process tree remained", cka_setup)
-        self.assertIn("ownedSignerThumbprints", cka_cleanup)
-        self.assertIn("Remove-Item -LiteralPath $CertificatePath", cka_cleanup)
-        self.assertIn('"unins000.exe"', cka_setup)
-        self.assertIn("SSL.com CKA uninstaller", cka_cleanup)
+        self.assertIn("repository-managed SSL.com CKA bootstrap is disabled", cka_setup)
+        self.assertIn("ENVIRONMENT_ONLY_NO_ARGV", cka_setup)
+        self.assertNotIn("ArgumentList", cka_setup)
+        self.assertNotIn('"-user"', cka_setup)
+        self.assertNotIn('"-pass"', cka_setup)
+        self.assertNotIn('"-totp"', cka_setup)
+        self.assertIn("repository-managed CKA cleanup is disabled", cka_cleanup)
+        self.assertIn("DeleteKey", cka_cleanup)
+        self.assertIn("CNG provider", cka_cleanup)
+        self.assertIn("private-key", cka_cleanup)
         portable_lifecycle = (
             root / "scripts/windows/verify-github-portable-lifecycle.ps1"
         ).read_text(encoding="utf-8")
@@ -429,6 +497,13 @@ class StorePackageBoundaryTests(unittest.TestCase):
             root / "scripts/windows/new-github-portable-archive.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("archive and checksum must not preexist", archive_builder)
+        signing_handoff = (
+            root / "scripts/windows/retain-private-signing-handoff.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("AegisGitHubSigningHandoff", signing_handoff)
+        self.assertIn("DriveFormat -cne 'NTFS'", signing_handoff)
+        self.assertIn("machineGuidSha256", signing_handoff)
+        self.assertIn("githubArtifactUploaded = $false", signing_handoff)
         signature_policy = (root / "scripts/windows/verify-github-signatures.ps1").read_text(
             encoding="utf-8"
         )

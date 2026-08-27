@@ -25,6 +25,10 @@ REQUIRED: dict[str, tuple[str, ...]] = {
         "<PublisherDisplayName>LAI ZEYU</PublisherDisplayName>",
     ),
     "desktop/windows/AegisForecast/MainWindow.xaml": (AUTHOR,),
+    "desktop/windows/AegisForecast/MainWindow.xaml.cs": (
+        "CapturePreviewAsync",
+        "storeListingScreenshotPrivacyValidated = true",
+    ),
     "desktop/windows/AegisForecast/AegisForecast.csproj": (
         f"<Authors>{AUTHOR}</Authors>",
         "<Company>LAI ZEYU</Company>",
@@ -141,17 +145,38 @@ def main() -> None:
         "wack-runner-policy.ps1",
         "prepare-store-handoff.ps1",
         "retain-private-store-handoff.ps1",
+        "prepare-store-listing-screenshot.ps1",
+        "-ValidatePublicOnly",
+        "artifacts/store-listing-public/Quant-Scenario-Studio-Store-01-Home.png",
+        "artifacts/store-listing-public/Quant-Scenario-Studio-Store-02-Scenarios.png",
+        "artifacts/store-listing-public/Quant-Scenario-Studio-Store-03-Privacy.png",
+        "artifacts/store-listing-public/Quant-Scenario-Studio-Store-04-About.png",
         "AEGIS_PRIVATE_STORE_HANDOFF_ROOT",
         "GITHUB_TRIGGERING_ACTOR",
     ):
         if token not in workflow_text:
             missing.append(f"windows-store.yml: missing strict technical identity/interactive token {token!r}")
+    if workflow_text.count("actions/upload-artifact") != 1:
+        missing.append("windows-store.yml: exactly one upload action is allowed, for four exact Store PNGs only")
+    screenshot_upload = workflow_text.split(
+        "Upload only four exact-candidate Store listing PNGs", 1
+    )[-1].split("Remove the exact public screenshot staging", 1)[0]
+    if ".msix" in screenshot_upload.lower() or "*" in screenshot_upload:
+        missing.append("windows-store.yml: screenshot upload paths must be four exact PNGs and contain no package/wildcard")
+    if "docs/assets/dashboard-demo.png" not in store_copy or "must never be submitted" not in store_copy:
+        missing.append("docs/windows/STORE_LISTING.md: concept dashboard must be disclaimed as non-Store evidence")
 
     release_workflow = (PROJECT_ROOT / ".github/workflows/windows-github-release.yml").read_text(encoding="utf-8")
     for token in (
-        "setup-esigner-cka.ps1",
-        "sign-github-portable.ps1",
         "verify-github-signatures.ps1",
+        "build-private-unsigned:",
+        "retain-private-signing-handoff.ps1",
+        "sign-private-no-checkout:",
+        "ENVIRONMENT_ONLY_NO_ARGV",
+        "credentialsPassedInArgv",
+        "cngProviderBaselineRestored",
+        "privateKeyBaselineRestored",
+        "deleteKeyAttempted",
         "Signed same-byte portable lifecycle round 1",
         "Signed same-byte portable lifecycle round 2",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -167,6 +192,12 @@ def main() -> None:
     publisher = release_workflow.split("  publish-release:", 1)[-1]
     if ".msix" in release_workflow.lower() or "actions/checkout" in publisher or "secrets.AEGIS_GITHUB_RELEASE_TOKEN" in release_workflow:
         missing.append("windows-github-release.yml: no-checkout isolated publisher must expose only the tested portable ZIP/checksum and ephemeral job token")
+    build_job = release_workflow.split("  build-private-unsigned:", 1)[-1].split("  sign-private-no-checkout:", 1)[0]
+    signer_job = release_workflow.split("  sign-private-no-checkout:", 1)[-1].split("  verify-signed:", 1)[0]
+    if "secrets." in build_job or "actions/upload-artifact" in build_job:
+        missing.append("windows-github-release.yml: checkout/build job must receive no signer secret and upload no unsigned artifact")
+    if "actions/checkout" in signer_job or "$PossibleOwned" in publisher:
+        missing.append("windows-github-release.yml: signer must remain no-checkout and publisher must never adopt an ambiguous Release")
 
     truth_surface_paths = (
         PROJECT_ROOT / "frontend/src",
