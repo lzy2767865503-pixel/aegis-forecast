@@ -446,6 +446,10 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("runs-on: windows-2025", hosted)
         self.assertIn("Build one MSIX and run two native lifecycle passes", hosted)
         self.assertIn("github.event.pull_request.head.sha || github.sha", hosted)
+        for candidate_workflow in (workflow, hosted):
+            self.assertIn("Microsoft Software Key Storage Provider", candidate_workflow)
+            self.assertIn("-KeySpec None", candidate_workflow)
+            self.assertNotIn("-KeySpec Signature", candidate_workflow)
         self.assertEqual(hosted.count("./scripts/windows/verify-native.ps1"), 2)
         self.assertIn("-QaRound 1", hosted)
         self.assertIn("-QaRound 2", hosted)
