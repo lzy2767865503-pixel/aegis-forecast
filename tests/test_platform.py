@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import closing
 from http.client import HTTPConnection
 from pathlib import Path
 from aegis_quant.audit import AuditLedger
@@ -99,10 +100,11 @@ class AuditAndRuntimeTests(unittest.TestCase):
         ledger.append("TEST", "ONE", {"value": 1}, "trace-1")
         ledger.append("TEST", "TWO", {"value": 2}, "trace-2")
         self.assertTrue(ledger.verify()["valid"])
-        with sqlite3.connect(self.database) as connection:
-            connection.execute(
-                "UPDATE audit_events SET payload_json='{}' WHERE sequence=1"
-            )
+        with closing(sqlite3.connect(self.database)) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE audit_events SET payload_json='{}' WHERE sequence=1"
+                )
         self.assertFalse(ledger.verify()["valid"])
 
     def test_database_contexts_close_connections(self) -> None:
