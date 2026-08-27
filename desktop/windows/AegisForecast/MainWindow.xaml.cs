@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
 using Windows.ApplicationModel;
 using Windows.Storage;
+using Windows.Storage.Streams;
 
 namespace AegisForecast;
 
@@ -407,10 +408,11 @@ public sealed partial class MainWindow : Window
                 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
+                using IRandomAccessStream randomAccessStream = stream.AsRandomAccessStream();
                 await Browser.CoreWebView2.CapturePreviewAsync(
                     CoreWebView2CapturePreviewImageFormat.Png,
-                    stream);
-                await stream.FlushAsync();
+                    randomAccessStream);
+                await randomAccessStream.FlushAsync();
             }
 
             FileInfo screenshotFile = new(screenshotPath);

@@ -524,6 +524,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
             root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
         ).read_text(encoding="utf-8")
         self.assertIn("CapturePreviewAsync", shell)
+        self.assertIn("AsRandomAccessStream", shell)
         self.assertIn("GetDpiForWindow(window) != 96", shell)
         self.assertIn("storeListingScreenshotPrivacyValidated = true", shell)
         self.assertIn("screenshots.Count != 4", shell)
