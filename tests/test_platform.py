@@ -422,6 +422,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
         )
         self.assertIn("runs-on: windows-2025", hosted)
         self.assertIn("Build one MSIX and run two native lifecycle passes", hosted)
+        self.assertIn("github.event.pull_request.head.sha || github.sha", hosted)
         self.assertEqual(hosted.count("./scripts/windows/verify-native.ps1"), 2)
         self.assertIn("-QaRound 1", hosted)
         self.assertIn("-QaRound 2", hosted)
