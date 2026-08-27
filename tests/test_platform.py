@@ -417,6 +417,31 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertGreaterEqual(release.count("integration_id -ne 15368"), 3)
         self.assertGreaterEqual(release.count("verify (3.10)|verify (3.12)"), 3)
 
+        hosted = (root / ".github/workflows/windows-hosted-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("runs-on: windows-2025", hosted)
+        self.assertIn("Build one MSIX and run two native lifecycle passes", hosted)
+        self.assertEqual(hosted.count("./scripts/windows/verify-native.ps1"), 2)
+        self.assertIn("-QaRound 1", hosted)
+        self.assertIn("-QaRound 2", hosted)
+        self.assertIn("generate-hosted-candidate-evidence.ps1", hosted)
+        self.assertIn("software binary or certificate", hosted)
+        self.assertIn("retention-days: 1", hosted)
+        self.assertNotIn("artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_store-unsigned.msix\n          if-no-files-found", hosted)
+        self.assertNotIn(".msix\n          if-no-files-found", hosted.lower())
+        self.assertNotIn("contents: write", hosted)
+
+        hosted_evidence = (
+            root / "scripts/windows/generate-hosted-candidate-evidence.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("nativeQaPasses = 2", hosted_evidence)
+        self.assertIn("independentLaunchNonces = 2", hosted_evidence)
+        self.assertIn("softwareBinariesUploaded = $false", hosted_evidence)
+        self.assertIn("developmentCertificateUploaded = $false", hosted_evidence)
+        self.assertIn("packageAbsentAfterUninstall", hosted_evidence)
+        self.assertIn("sidecarExitedViaParentWatchdog", hosted_evidence)
+
     def test_windows_scripts_fail_closed_and_embed_source_hash_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
         policy_result = subprocess.run(
