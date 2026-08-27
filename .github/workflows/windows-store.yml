@@ -236,12 +236,19 @@ jobs:
           "thumbprint=$($Certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
           Export-PfxCertificate -Cert $Certificate -FilePath $Pfx -Password $Password | Out-Null
           Export-Certificate -Cert $Certificate -FilePath $Cer | Out-Null
-          $Certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
-          if (-not (Test-Path -LiteralPath $Certutil -PathType Leaf)) { throw 'Windows certutil is missing.' }
-          & $Certutil -user -f -addstore Root $Cer | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw "certutil root import returned native exit code $LASTEXITCODE." }
-          $ImportedRoot = Get-Item -LiteralPath "Cert:\CurrentUser\Root\$($Certificate.Thumbprint)" -ErrorAction Stop
-          if ($ImportedRoot.Subject -cne $Subject) { throw 'Imported development trust anchor identity differs from its certificate.' }
+          $PublicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Cer)
+          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+          try {
+            $TrustedPeople.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $TrustedPeople.Add($PublicCertificate)
+          } finally {
+            $TrustedPeople.Dispose()
+            $PublicCertificate.Dispose()
+          }
+          $ImportedTrust = Get-Item -LiteralPath "Cert:\CurrentUser\TrustedPeople\$($Certificate.Thumbprint)" -ErrorAction Stop
+          if ($ImportedTrust.Subject -cne $Subject -or $ImportedTrust.HasPrivateKey) {
+            throw 'Imported build-only public trust differs from its certificate.'
+          }
 
       - name: Build the only technical-identity development candidate
         shell: pwsh
@@ -253,12 +260,43 @@ jobs:
           -StoreIdentityName $env:AEGIS_STORE_IDENTITY_NAME
           -StorePublisher $env:AEGIS_STORE_PUBLISHER
 
+      - name: Remove build-only trust before independent native QA
+        shell: pwsh
+        run: |
+          ./scripts/windows/remove-development-certificate.ps1 `
+            -Thumbprint '${{ steps.cert.outputs.thumbprint }}' `
+            -StoreLocations @('CurrentUser\TrustedPeople')
+          if (Test-Path -LiteralPath 'Cert:\CurrentUser\TrustedPeople\${{ steps.cert.outputs.thumbprint }}') {
+            throw 'Build-only trust remained before native QA.'
+          }
+
       - name: Native QA round 1 on the original candidate bytes
         shell: pwsh
         run: ./scripts/windows/verify-native.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -QaRound 1
       - name: Native QA round 2 on the unchanged candidate bytes
         shell: pwsh
         run: ./scripts/windows/verify-native.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -QaRound 2
+      - name: Restore public trust only for strict WACK
+        shell: pwsh
+        run: |
+          $CertificatePath = (Resolve-Path 'artifacts/candidate/QuantScenarioStudio_signed-dev.cer').Path
+          $Certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
+          if ($Certificate.Thumbprint -cne '${{ steps.cert.outputs.thumbprint }}' -or
+              $Certificate.Subject -cne $env:AEGIS_STORE_PUBLISHER -or $Certificate.HasPrivateKey) {
+            throw 'WACK public certificate identity is invalid.'
+          }
+          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+          try {
+            $TrustedPeople.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $TrustedPeople.Add($Certificate)
+          } finally {
+            $TrustedPeople.Dispose()
+            $Certificate.Dispose()
+          }
+          $ImportedTrust = Get-Item -LiteralPath 'Cert:\CurrentUser\TrustedPeople\${{ steps.cert.outputs.thumbprint }}' -ErrorAction Stop
+          if ($ImportedTrust.Subject -cne $env:AEGIS_STORE_PUBLISHER -or $ImportedTrust.HasPrivateKey) {
+            throw 'WACK public trust identity is invalid.'
+          }
       - name: Strict WACK round 1 on those same QA bytes
         shell: pwsh
         run: >-
