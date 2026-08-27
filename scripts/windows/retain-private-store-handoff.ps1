@@ -122,10 +122,12 @@ Assert-ExactJsonSchema $Source @(
     "packageIdentity", "technicalPublisher", "sourceCommit", "submissionPackageFile",
     "submissionPackageSize", "submissionPackageSha256", "qaCandidatePackageSha256",
     "payloadFileCount", "payloadTreeSha256", "nativeQaRounds", "wackRounds",
+    "approvedWackFileVersion", "approvedWackSha256", "approvedWackSignerSubject",
+    "approvedWackSignerThumbprint", "approvedWackTestCount", "approvedWackTestInventorySha256",
     "submissionSignatureStatus", "submissionStatus", "certificationStatus",
     "storeSignsAfterSubmission", "qaCertificateIncluded", "publicGitHubAsset", "handoffVisibility"
 ) "Prepared Store lineage"
-if ($Source.schemaVersion -ne 1 -or $Source.product -cne "Quant Scenario Studio by LAI ZEYU" -or
+if ($Source.schemaVersion -ne 2 -or $Source.product -cne "Quant Scenario Studio by LAI ZEYU" -or
     $Source.author -cne "LAI ZEYU（来泽宇）" -or $Source.publisherDisplayName -cne "LAI ZEYU" -or
     $Source.partnerCenterProductId -cne "9NWTH4KJX5GW" -or
     $Source.packageIdentity -cne "LAIZEYU.QuantScenarioStudiobyLAIZEYU" -or
@@ -137,6 +139,13 @@ if ($Source.schemaVersion -ne 1 -or $Source.product -cne "Quant Scenario Studio 
     [string]$Source.qaCandidatePackageSha256 -cnotmatch '^[0-9a-f]{64}$' -or
     [string]$Source.payloadTreeSha256 -cnotmatch '^[0-9a-f]{64}$' -or
     [int]$Source.nativeQaRounds -ne 2 -or [int]$Source.wackRounds -ne 2 -or
+    [string]$Source.approvedWackFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
+    [string]$Source.approvedWackSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+    [string]::IsNullOrWhiteSpace([string]$Source.approvedWackSignerSubject) -or
+    [string]$Source.approvedWackSignerSubject -match '[\r\n]' -or
+    [string]$Source.approvedWackSignerThumbprint -cnotmatch '^[0-9a-f]{40}$' -or
+    [int]$Source.approvedWackTestCount -lt 1 -or [int]$Source.approvedWackTestCount -gt 10000 -or
+    [string]$Source.approvedWackTestInventorySha256 -cnotmatch '^[0-9a-f]{64}$' -or
     $Source.submissionSignatureStatus -cne "UNSIGNED_FOR_PARTNER_CENTER" -or
     $Source.submissionStatus -cne "NOT_SUBMITTED" -or $Source.certificationStatus -cne "NOT_CERTIFIED" -or
     -not $Source.storeSignsAfterSubmission -or $Source.qaCertificateIncluded -or $Source.publicGitHubAsset -or
@@ -223,7 +232,7 @@ $RunAclSddl = $RunAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.Acce
 $RootAclHash = Get-TextSha256 $RootAclSddl
 $RunAclHash = Get-TextSha256 $RunAclSddl
 $Receipt = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     product = "Quant Scenario Studio by LAI ZEYU"
     author = "LAI ZEYU（来泽宇）"
     githubRunId = $env:GITHUB_RUN_ID
@@ -232,6 +241,12 @@ $Receipt = [ordered]@{
     partnerCenterProductId = "9NWTH4KJX5GW"
     submissionPackageSha256 = $Source.submissionPackageSha256
     payloadTreeSha256 = $Source.payloadTreeSha256
+    approvedWackFileVersion = $Source.approvedWackFileVersion
+    approvedWackSha256 = $Source.approvedWackSha256
+    approvedWackSignerSubject = $Source.approvedWackSignerSubject
+    approvedWackSignerThumbprint = $Source.approvedWackSignerThumbprint
+    approvedWackTestCount = [int]$Source.approvedWackTestCount
+    approvedWackTestInventorySha256 = $Source.approvedWackTestInventorySha256
     rootAclSha256 = $RootAclHash
     handoffAclSha256 = $RunAclHash
     accessIdentityCount = $AllowedSids.Count

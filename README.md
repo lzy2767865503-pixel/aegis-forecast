@@ -115,9 +115,10 @@ the upstream dependency license inventory.
   certificate and detailed evidence are deleted and no Store package is ever
   uploaded to GitHub.
 - GitHub distribution is a separate portable ZIP. A protected build account
-  checks out and builds unsigned bytes without signing secrets, then atomically
-  hands them to a different no-checkout signer account on the same machine
-  through a local fixed-NTFS exact-ACL directory. The signer accepts only a
+  checks out and builds unsigned bytes without signing secrets or Administrator
+  membership, then writes only to a dedicated ingress on the same machine. A
+  different no-checkout signer account removes the build SID and atomically moves
+  unchanged bytes into a signer/SYSTEM-only local fixed-NTFS vault. It accepts only a
   pre-administered hash/Authenticode-bound orchestrator whose credential
   transport is `ENVIRONMENT_ONLY_NO_ARGV`; repository-managed CKA bootstrap is
   fail-closed because its vendor CLI would expose credentials in argv. Only

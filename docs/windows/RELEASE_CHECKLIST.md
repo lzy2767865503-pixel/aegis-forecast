@@ -11,7 +11,12 @@ display identity: **LAI ZEYU**.
   manifest, and the workflow's hard-locked expected value all equal that exact
   Identity Name; any drift must fail before the self-hosted build.
 - [ ] Set protected environment variable `AEGIS_APPROVED_WACK_FILE_VERSION` to
-  the exact four-part file version of the currently approved AppCert executable.
+  the exact four-part file version of the currently approved AppCert executable;
+  also set its exact lowercase SHA-256, Authenticode signer Subject/thumbprint,
+  complete TEST count and TEST inventory SHA-256 in
+  `AEGIS_APPROVED_WACK_SHA256`, `AEGIS_APPROVED_WACK_SIGNER_SUBJECT`,
+  `AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT`, `AEGIS_APPROVED_WACK_TEST_COUNT` and
+  `AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256`. Missing/unapproved values block the run.
 - [ ] Set protected `AEGIS_PRIVATE_STORE_HANDOFF_ROOT` to a pre-provisioned local
   fixed-NTFS directory named exactly `AegisStoreHandoff`, outside workspace/temp/
   OneDrive, with protected ACL FullControl only for the runner account, SYSTEM
@@ -33,7 +38,9 @@ display identity: **LAI ZEYU**.
   home/scenario/privacy/About PNGs are distinct, each is at least 1366x768, and
   each visibly matches the exact verified candidate.
   Never substitute `docs/assets/dashboard-demo.png`, a mock-up or a concept
-  image for this gate.
+  image for this gate. This short-lived Actions artifact is only a controlled
+  screenshot transfer bundle: manually review and upload the same four PNGs in
+  Partner Center. Its existence is not Microsoft validation, submission or acceptance.
 - [ ] Every material view labels stable-hash deterministic synthetic/non-market data.
 - [ ] Nasdaq scope says **2026-08-26 snapshot**, never “current constituents.”
 - [ ] Neutral thresholds contain no buy/sell, position sizing, target/limit,
@@ -61,7 +68,8 @@ display identity: **LAI ZEYU**.
 - [ ] One elevated, active-interactive self-hosted Windows job builds one unsigned
   Partner Center MSIX, makes one QA copy, and signs only that copy with the
   ephemeral technical-Publisher certificate. It verifies Microsoft-signed
-  AppCert against `AEGIS_APPROVED_WACK_FILE_VERSION`.
+  AppCert immediately before execution against all six protected version/hash/
+  signer/test-inventory values and holds the exact executable against replacement.
 - [ ] Full non-signature MSIX content and the canonical payload-tree hash are
   identical between the original unsigned submission and signed QA copy.
 - [ ] The same job runs QA1, QA2, WACK1 and WACK2 sequentially on the unchanged
@@ -96,6 +104,11 @@ display identity: **LAI ZEYU**.
   no-checkout signer account. The checkout/build account has no signing secrets.
   Build and signer runner names/account SIDs are distinct and bind one physical
   host through the MachineGuid hash plus a local fixed-NTFS exact-ACL handoff.
+- [ ] The handoff root has separate pre-provisioned `ingress` and `signer-vault`
+  children. The non-Administrator build SID can write only ingress; before any
+  secret use the signer removes that SID from every run object and atomically
+  moves the unchanged run beneath the signer/SYSTEM-only vault. Administrators,
+  broad principals, reparse ancestors and public unsigned artifacts are forbidden.
 - [ ] `AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_PATH`, its SHA-256 and Authenticode
   signer thumbprint identify one pre-administered script outside workspace/temp;
   credential transport is exactly `ENVIRONMENT_ONLY_NO_ARGV`. If the vendor path
@@ -109,7 +122,10 @@ display identity: **LAI ZEYU**.
   required PRs and required review-thread resolution.
 - [ ] The signer receipt proves exact run-created key `DeleteKey`, certificate
   store, CNG provider/private-key baselines, CKA state and temporary client are
-  restored before signed bytes leave the signer. The no-checkout publisher
+  restored before signed bytes leave the signer. It binds the exact key container,
+  unique name/provider, DeleteKey result, run/attempt, runner/MachineGuid hash,
+  signer SID and locked orchestrator hash/AuthentiCode signer; a separate post-step
+  recomputes all available baselines and exact-key absence. The no-checkout publisher
   establishes ownership only from immutable ID/node-ID/created-at fields in one
   successful HTTP 201 response; any ambiguous creation outcome is diagnostic-only.
 - [ ] After publication, re-download the exact ZIP/checksum pair and reverify all

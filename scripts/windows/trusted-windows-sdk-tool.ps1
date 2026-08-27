@@ -99,10 +99,19 @@ function Get-AegisTrustedWindowsSdkTool {
 }
 
 function Get-AegisTrustedWindowsAppCertificationKit {
-    param([Parameter(Mandatory = $true)][string]$ApprovedFileVersion)
+    param(
+        [Parameter(Mandatory = $true)][string]$ApprovedFileVersion,
+        [Parameter(Mandatory = $true)][string]$ApprovedSha256,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerSubject,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerThumbprint
+    )
     if (-not $IsWindows) { throw "App Certification Kit resolution requires Windows." }
-    if ($ApprovedFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$') {
-        throw "Approved AppCert file version must be a four-part numeric version."
+    if ($ApprovedFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
+        $ApprovedSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $ApprovedSignerThumbprint -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]::IsNullOrWhiteSpace($ApprovedSignerSubject) -or
+        $ApprovedSignerSubject.Length -gt 512 -or $ApprovedSignerSubject -match '[\r\n]') {
+        throw "Protected AppCert file version, SHA-256, signer Subject, or signer thumbprint is malformed."
     }
     $WindowsKitsRoot = [IO.Path]::GetFullPath(
         (Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "Windows Kits\10")
@@ -124,12 +133,19 @@ function Get-AegisTrustedWindowsAppCertificationKit {
         -not $Signature.SignerCertificate -or -not $Signature.TimeStamperCertificate) {
         throw "Approved AppCert tool version/hash/signature evidence is incomplete."
     }
+    $SignerSubject = [string]$Signature.SignerCertificate.Subject
+    $SignerThumbprint = $Signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+    if ($Sha256 -cne $ApprovedSha256 -or $SignerSubject -cne $ApprovedSignerSubject -or
+        $SignerThumbprint -cne $ApprovedSignerThumbprint) {
+        throw "Installed AppCert hash or exact Authenticode signer identity differs from protected approval."
+    }
     return [pscustomobject]@{
         path = $TrustedPath
         fileVersion = $InstalledFileVersion
         productVersion = $ProductVersion
         sha256 = $Sha256
-        signerThumbprint = $Signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+        signerSubject = $SignerSubject
+        signerThumbprint = $SignerThumbprint
         timestampThumbprint = $Signature.TimeStamperCertificate.Thumbprint.ToLowerInvariant()
     }
 }

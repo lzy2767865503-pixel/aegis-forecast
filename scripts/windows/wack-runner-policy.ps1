@@ -3,7 +3,19 @@ Set-StrictMode -Version Latest
 
 function Assert-AegisWackRunner {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$ApprovedFileVersion)
+    param(
+        [Parameter(Mandatory = $true)][string]$ApprovedFileVersion,
+        [Parameter(Mandatory = $true)][string]$ApprovedSha256,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerSubject,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerThumbprint,
+        [Parameter(Mandatory = $true)][int]$ApprovedTestCount,
+        [Parameter(Mandatory = $true)][string]$ApprovedTestInventorySha256
+    )
+
+    if ($ApprovedTestCount -lt 1 -or $ApprovedTestCount -gt 10000 -or
+        $ApprovedTestInventorySha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "Protected WACK TEST count or inventory SHA-256 is malformed."
+    }
 
     if (-not $IsWindows) { throw "WACK certification requires Windows." }
     if (-not [Environment]::UserInteractive) { throw "WACK requires an active interactive user session." }
@@ -23,7 +35,11 @@ function Assert-AegisWackRunner {
         $Identity.Dispose()
     }
 
-    $TrustedKit = Get-AegisTrustedWindowsAppCertificationKit -ApprovedFileVersion $ApprovedFileVersion
+    $TrustedKit = Get-AegisTrustedWindowsAppCertificationKit `
+        -ApprovedFileVersion $ApprovedFileVersion `
+        -ApprovedSha256 $ApprovedSha256 `
+        -ApprovedSignerSubject $ApprovedSignerSubject `
+        -ApprovedSignerThumbprint $ApprovedSignerThumbprint
     $AppCert = [string]$TrustedKit.path
     $InstalledFileVersion = [string]$TrustedKit.fileVersion
 
@@ -32,8 +48,11 @@ function Assert-AegisWackRunner {
         fileVersion = $InstalledFileVersion
         productVersion = [string]$TrustedKit.productVersion
         appCertSha256 = [string]$TrustedKit.sha256
+        appCertSignerSubject = [string]$TrustedKit.signerSubject
         appCertSignerThumbprint = [string]$TrustedKit.signerThumbprint
         appCertTimestampThumbprint = [string]$TrustedKit.timestampThumbprint
+        approvedTestCount = $ApprovedTestCount
+        approvedTestInventorySha256 = $ApprovedTestInventorySha256
         sessionId = $SessionId
         elevatedAdministrator = $true
     }

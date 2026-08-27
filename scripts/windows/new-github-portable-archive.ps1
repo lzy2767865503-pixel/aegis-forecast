@@ -32,6 +32,12 @@ try {
         Copy-Item -LiteralPath $Child.FullName -Destination $StagingProduct -Recurse -Force
     }
     Compress-Archive -LiteralPath $StagingProduct -DestinationPath $Archive -CompressionLevel Optimal
+    $VerificationRoot = Join-Path $StagingParent 'verified-extraction'
+    $ArchiveEvidence = & (Join-Path $PSScriptRoot 'verify-portable-archive.ps1') -ArchivePath $Archive -DestinationPath $VerificationRoot
+    if ($ArchiveEvidence.inventorySha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [int]$ArchiveEvidence.entryCount -lt 3 -or [int]$ArchiveEvidence.fileCount -lt 2) {
+        throw "New portable ZIP did not produce a complete safe-entry inventory."
+    }
     $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
     "$Hash  $([IO.Path]::GetFileName($Archive))" | Set-Content -Encoding ascii $Checksum
     $Completed = $true

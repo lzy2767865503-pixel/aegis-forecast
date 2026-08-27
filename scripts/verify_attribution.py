@@ -152,6 +152,12 @@ def main() -> None:
         "artifacts/store-listing-public/Quant-Scenario-Studio-Store-03-Privacy.png",
         "artifacts/store-listing-public/Quant-Scenario-Studio-Store-04-About.png",
         "AEGIS_PRIVATE_STORE_HANDOFF_ROOT",
+        "AEGIS_APPROVED_WACK_SHA256",
+        "AEGIS_APPROVED_WACK_SIGNER_SUBJECT",
+        "AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT",
+        "AEGIS_APPROVED_WACK_TEST_COUNT",
+        "AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256",
+        "postCleanupCngKeyFiles",
         "GITHUB_TRIGGERING_ACTOR",
     ):
         if token not in workflow_text:
@@ -177,6 +183,10 @@ def main() -> None:
         "cngProviderBaselineRestored",
         "privateKeyBaselineRestored",
         "deleteKeyAttempted",
+        "deleteKeySucceeded",
+        "signerRunnerName",
+        "signer-vault",
+        "archiveEntryInventorySha256",
         "Signed same-byte portable lifecycle round 1",
         "Signed same-byte portable lifecycle round 2",
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",

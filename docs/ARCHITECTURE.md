@@ -79,17 +79,22 @@ PIDs become cleanup targets only after process name, canonical path and creation
 time validation. WACK also binds cleanup to exact PackageFullName/PFN/AppCert
 roots captured during that run.
 
-The Store verification workflow uploads no Actions artifact at all. It parses
-strict private schemas, regenerates a small canonical record, scans it for
-embedded executable/archive/certificate/secret encodings, and writes only a
-fixed Job Summary.
+The Store verification workflow uploads no package or private evidence artifact.
+It parses strict private schemas, regenerates a small canonical record, scans it
+for embedded executable/archive/certificate/secret encodings, and writes a fixed
+Job Summary. After private cleanup it may upload only four exact-candidate,
+privacy-validated PNGs as a short-lived operator transfer bundle; that bundle is
+not Microsoft Store acceptance evidence.
 
 GitHub distribution is a separate portable ZIP, never the Store MSIX. A
-protected build runner/account has no signing secrets and freezes unsigned bytes
-into a same-host local fixed-NTFS exact-ACL handoff. A different no-checkout
+protected non-Administrator build runner/account has no signing secrets and
+freezes unsigned bytes into the ingress side of a same-host local fixed-NTFS
+exact-ACL handoff. A different no-checkout
 runner/account may sign them only through a pre-administered hash- and
 Authenticode-bound orchestrator that consumes secrets from the environment and
-attests that no credential entered argv. Repository CKA setup/cleanup scripts
+attests that no credential entered argv. Before secret use it removes the build
+SID and atomically moves the unchanged run into a signer/SYSTEM-only vault.
+Repository CKA setup/cleanup scripts
 are intentionally blocked. The signer receipt must prove certificate-store,
 CNG-provider and private-key baselines are restored before signed bytes are
 uploaded for two unchanged-byte hosted lifecycle passes.

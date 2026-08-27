@@ -17,18 +17,26 @@ function Assert-AegisCanonicalEvidenceFile {
         "storeIdentityName", "sourceCommit", "submissionPackageSha256", "qaCandidatePackageSha256",
         "payloadTreeSha256", "qa1PackageSha256", "qa2PackageSha256", "wack1PackageSha256",
         "wack2PackageSha256", "wack1ReportSha256", "wack2ReportSha256", "qaRounds", "wackRounds",
+        "approvedWackFileVersion", "approvedWackSha256", "approvedWackSignerSubject",
+        "approvedWackSignerThumbprint", "approvedWackTestCount", "approvedWackTestInventorySha256",
         "binariesPublished", "storeHandoffPrivate"
     )
     $ActualKeys = @($Value.PSObject.Properties.Name)
     if (@($ExpectedKeys | Where-Object { $_ -notin $ActualKeys }).Count -ne 0 -or @($ActualKeys | Where-Object { $_ -notin $ExpectedKeys }).Count -ne 0) { throw "Canonical evidence schema is not exact." }
-    if ($Value.schemaVersion -ne 3 -or $Value.product -cne "Quant Scenario Studio by LAI ZEYU" -or
+    if ($Value.schemaVersion -ne 4 -or $Value.product -cne "Quant Scenario Studio by LAI ZEYU" -or
         $Value.author -cne "LAI ZEYU（来泽宇）" -or $Value.publisherDisplayName -cne "LAI ZEYU" -or
         $Value.technicalPublisher -cne "CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8" -or
         $Value.storeIdentityName -cne "LAIZEYU.QuantScenarioStudiobyLAIZEYU" -or
-        $Value.sourceCommit -cnotmatch "^[0-9a-f]{40}$" -or $Value.binariesPublished -or -not $Value.storeHandoffPrivate) { throw "Canonical evidence fixed identity/status fields are invalid." }
-    foreach ($Name in @("submissionPackageSha256", "qaCandidatePackageSha256", "payloadTreeSha256", "qa1PackageSha256", "qa2PackageSha256", "wack1PackageSha256", "wack2PackageSha256", "wack1ReportSha256", "wack2ReportSha256")) {
+        $Value.sourceCommit -cnotmatch "^[0-9a-f]{40}$" -or
+        $Value.approvedWackFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
+        [string]::IsNullOrWhiteSpace([string]$Value.approvedWackSignerSubject) -or
+        [string]$Value.approvedWackSignerSubject -match '[\r\n]' -or
+        [int]$Value.approvedWackTestCount -lt 1 -or [int]$Value.approvedWackTestCount -gt 10000 -or
+        $Value.binariesPublished -or -not $Value.storeHandoffPrivate) { throw "Canonical evidence fixed identity/status fields are invalid." }
+    foreach ($Name in @("submissionPackageSha256", "qaCandidatePackageSha256", "payloadTreeSha256", "qa1PackageSha256", "qa2PackageSha256", "wack1PackageSha256", "wack2PackageSha256", "wack1ReportSha256", "wack2ReportSha256", "approvedWackSha256", "approvedWackTestInventorySha256")) {
         if ([string]$Value.$Name -cnotmatch "^[0-9a-f]{64}$") { throw "Canonical evidence hash field $Name is invalid." }
     }
+    if ([string]$Value.approvedWackSignerThumbprint -cnotmatch '^[0-9a-f]{40}$') { throw "Canonical evidence approved AppCert signer thumbprint is invalid." }
     $Rounds = @($Value.qaRounds)
     if ($Rounds.Count -ne 2 -or $Rounds[0] -cne "PASS" -or $Rounds[1] -cne "PASS") { throw "Canonical evidence must prove exactly two PASS rounds." }
     $WackRounds = @($Value.wackRounds)

@@ -132,7 +132,9 @@ certificate/private-work-product cleanup those four PNGs are the sole files in
 the Actions artifact `aegis-store-listing-screenshot-<run-id>-<run-attempt>`.
 No MSIX, unsigned submission, certificate, WACK report or private lineage JSON
 enters that artifact. Until that protected Windows run succeeds, the final Store
-screenshots are explicitly **not ready**.
+screenshots are explicitly **not ready**. The artifact is a short-lived transfer
+bundle only: an operator must review and upload these exact PNGs in Partner Center.
+It does not prove Microsoft validation, submission, certification or acceptance.
 
 Any additional listing views, if later captured manually, must come from the same
 exact verified candidate at 100% Windows scaling:

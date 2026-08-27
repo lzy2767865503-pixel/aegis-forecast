@@ -198,10 +198,12 @@ for ($Round = 1; $Round -le 2; $Round++) {
         "powershellTranscriptSha256", "appcertConsoleSha256", "resultCount", "overallResults", "testCount",
         "testInventorySha256", "reportLatestVersion", "reportVersion", "hardTimeoutEnforced",
         "interactiveSessionId", "elevatedAdministrator", "approvedWackFileVersion", "wackFileVersion",
-        "appcertProductVersion", "appcertSha256", "appcertSignerThumbprint", "appcertTimestampThumbprint",
+        "approvedWackSha256", "approvedWackSignerSubject", "approvedWackSignerThumbprint",
+        "approvedWackTestCount", "approvedWackTestInventorySha256",
+        "appcertProductVersion", "appcertSha256", "appcertSignerSubject", "appcertSignerThumbprint", "appcertTimestampThumbprint",
         "noRuntimeResidue", "capturedAt"
     ) "WACK round $Round summary"
-    if ($Wack.schemaVersion -ne 4 -or [string]$Wack.wackRound -cne [string]$Round -or
+    if ($Wack.schemaVersion -ne 5 -or [string]$Wack.wackRound -cne [string]$Round -or
         $Wack.product -cne $ExpectedProduct -or $Wack.author -cne $ExpectedAuthor -or
         $Wack.technicalPublisher -cne $ExpectedPublisher -or $Wack.sourceCommit -cne $Candidate.sourceCommit -or
         $Wack.packageSha256Before -cne $Candidate.packageSha256 -or $Wack.packageSha256After -cne $Candidate.packageSha256 -or
@@ -212,9 +214,19 @@ for ($Round = 1; $Round -le 2; $Round++) {
         -not $Wack.hardTimeoutEnforced -or [int]$Wack.interactiveSessionId -eq 0 -or
         -not $Wack.elevatedAdministrator -or -not $Wack.reportLatestVersion -or
         [string]$Wack.approvedWackFileVersion -cne [string]$env:AEGIS_APPROVED_WACK_FILE_VERSION -or
+        [string]$Wack.approvedWackSha256 -cne [string]$env:AEGIS_APPROVED_WACK_SHA256 -or
+        [string]$Wack.approvedWackSignerSubject -cne [string]$env:AEGIS_APPROVED_WACK_SIGNER_SUBJECT -or
+        [string]$Wack.approvedWackSignerThumbprint -cne [string]$env:AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT -or
+        [int]$Wack.approvedWackTestCount -ne [int]$env:AEGIS_APPROVED_WACK_TEST_COUNT -or
+        [string]$Wack.approvedWackTestInventorySha256 -cne [string]$env:AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256 -or
         [string]$Wack.wackFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
         [string]$Wack.wackFileVersion -cne [string]$Wack.approvedWackFileVersion -or
         [string]$Wack.reportVersion -cne [string]$Wack.approvedWackFileVersion -or
+        [string]$Wack.appcertSha256 -cne [string]$Wack.approvedWackSha256 -or
+        [string]$Wack.appcertSignerSubject -cne [string]$Wack.approvedWackSignerSubject -or
+        [string]$Wack.appcertSignerThumbprint -cne [string]$Wack.approvedWackSignerThumbprint -or
+        [int]$Wack.testCount -ne [int]$Wack.approvedWackTestCount -or
+        [string]$Wack.testInventorySha256 -cne [string]$Wack.approvedWackTestInventorySha256 -or
         [string]::IsNullOrWhiteSpace([string]$Wack.appcertProductVersion) -or
         [int]$Wack.testCount -lt 1 -or -not $Wack.noRuntimeResidue) {
         throw "WACK round $Round summary does not prove a fresh, bounded, complete PASS on the common candidate lineage."
@@ -239,8 +251,9 @@ for ($Round = 1; $Round -le 2; $Round++) {
     $WackSummaries += $Wack
 }
 foreach ($BoundField in @(
-    "approvedWackFileVersion", "wackFileVersion", "appcertProductVersion", "appcertSha256",
-    "appcertSignerThumbprint", "appcertTimestampThumbprint", "reportVersion", "testCount", "testInventorySha256"
+    "approvedWackFileVersion", "approvedWackSha256", "approvedWackSignerSubject", "approvedWackSignerThumbprint",
+    "approvedWackTestCount", "approvedWackTestInventorySha256", "wackFileVersion", "appcertProductVersion", "appcertSha256",
+    "appcertSignerSubject", "appcertSignerThumbprint", "appcertTimestampThumbprint", "reportVersion", "testCount", "testInventorySha256"
 )) {
     if ([string]$WackSummaries[0].$BoundField -cne [string]$WackSummaries[1].$BoundField) {
         throw "The two WACK rounds are not bound to one exact approved AppCert binary and complete TEST inventory: $BoundField."
@@ -256,7 +269,7 @@ Assert-NativeSuccess "Microsoft SPDX SBOM generation"
 if (-not (Test-Path -LiteralPath $ManifestRoot)) { throw "Private SBOM generation failed." }
 
 $Canonical = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     product = $ExpectedProduct
     author = $ExpectedAuthor
     publisherDisplayName = "LAI ZEYU"
@@ -272,6 +285,12 @@ $Canonical = [ordered]@{
     wack2PackageSha256 = $WackSummaries[1].packageSha256After
     wack1ReportSha256 = $WackSummaries[0].reportSha256
     wack2ReportSha256 = $WackSummaries[1].reportSha256
+    approvedWackFileVersion = $WackSummaries[0].approvedWackFileVersion
+    approvedWackSha256 = $WackSummaries[0].approvedWackSha256
+    approvedWackSignerSubject = $WackSummaries[0].approvedWackSignerSubject
+    approvedWackSignerThumbprint = $WackSummaries[0].approvedWackSignerThumbprint
+    approvedWackTestCount = [int]$WackSummaries[0].approvedWackTestCount
+    approvedWackTestInventorySha256 = $WackSummaries[0].approvedWackTestInventorySha256
     qaRounds = @("PASS", "PASS")
     wackRounds = @("PASS", "PASS")
     binariesPublished = $false

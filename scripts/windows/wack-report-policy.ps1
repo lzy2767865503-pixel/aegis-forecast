@@ -50,6 +50,52 @@ function Read-AegisCompleteWackReport {
         foreach ($Test in $DescendantTests) { $RequirementTests.Add($Test) }
     }
     if ($RequirementTests.Count -ne $Tests.Count) { throw "Every WACK TEST must belong to exactly one REQUIREMENT." }
+
+    function ConvertTo-AegisWackSignal([string]$Value, [string]$Label) {
+        $Normalized = (($Value.Trim().ToUpperInvariant() -replace '[_\-/]+', ' ') -replace '\s+', ' ')
+        if ([string]::IsNullOrWhiteSpace($Normalized) -or
+            $Normalized -match '(^|\s)(?:FAIL|FAILED|ERROR|WARNING|WARN|SKIPPED|INCOMPLETE)(\s|$)' -or
+            $Normalized -match '^NOT (?:RUN|EXECUTED)$') {
+            throw "$Label contains a failed, error, warning, skipped, not-run, or empty WACK signal."
+        }
+        if ($Normalized -in @('PASS', 'PASSED')) { return 'PASS' }
+        if ($Normalized -in @('NOT APPLICABLE', 'N A', 'NA')) { return 'NOT APPLICABLE' }
+        throw "$Label contains a non-whitelisted WACK STATUS/RESULT/OUTCOME value."
+    }
+
+    function Get-AegisDirectNodeSignals([Xml.XmlNode]$Node, [string]$Label) {
+        $Signals = [Collections.Generic.List[object]]::new()
+        foreach ($Attribute in @($Node.Attributes)) {
+            $Name = ($Attribute.LocalName -replace '[_-]', '').ToUpperInvariant()
+            if ($Name -in @('STATUS', 'RESULT', 'OUTCOME')) {
+                $Signals.Add([pscustomobject]@{
+                    source = "@$($Attribute.LocalName)"
+                    canonical = ConvertTo-AegisWackSignal -Value ([string]$Attribute.Value) -Label $Label
+                })
+            }
+        }
+        foreach ($Child in @($Node.ChildNodes | Where-Object { $_.NodeType -eq [Xml.XmlNodeType]::Element })) {
+            $Name = ($Child.LocalName -replace '[_-]', '').ToUpperInvariant()
+            if ($Name -in @('STATUS', 'RESULT', 'OUTCOME')) {
+                $Signals.Add([pscustomobject]@{
+                    source = $Child.LocalName
+                    canonical = ConvertTo-AegisWackSignal -Value ([string]$Child.InnerText) -Label $Label
+                })
+            }
+        }
+        if (@($Signals | ForEach-Object canonical | Sort-Object -Unique).Count -gt 1) {
+            throw "$Label has conflicting direct STATUS/RESULT/OUTCOME values."
+        }
+        return @($Signals)
+    }
+
+    $ReportSignals = @(Get-AegisDirectNodeSignals -Node $ReportXml.DocumentElement -Label 'WACK REPORT')
+    if (@($ReportSignals | Where-Object { $_.canonical -cne 'PASS' }).Count -ne 0) {
+        throw 'WACK REPORT STATUS/RESULT/OUTCOME conflicts with its exact overall PASS.'
+    }
+    foreach ($Requirement in $Requirements) {
+        [void](Get-AegisDirectNodeSignals -Node $Requirement -Label 'WACK REQUIREMENT')
+    }
     $ResultValues = [System.Collections.Generic.List[string]]::new()
     $TestRows = [System.Collections.Generic.List[object]]::new()
     $SeenIndexes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -67,12 +113,15 @@ function Read-AegisCompleteWackReport {
         }
         $DirectResults = @($Test.SelectNodes("./*[local-name()='RESULT']"))
         if ($DirectResults.Count -ne 1) { throw "Every WACK TEST must contain exactly one direct result." }
-        $Status = (($DirectResults[0].InnerText.Trim().ToUpperInvariant() -replace '[_\-/]+', ' ') -replace '\s+', ' ')
-        if ($Status -notin @('PASS', 'PASSED', 'NOT APPLICABLE', 'N A', 'NA')) {
-            throw "Every WACK TEST status must be an exact successful or not-applicable result."
+        $TestSignals = @(Get-AegisDirectNodeSignals -Node $Test -Label "WACK TEST $IndexText")
+        $Status = ConvertTo-AegisWackSignal -Value ([string]$DirectResults[0].InnerText) -Label "WACK TEST $IndexText RESULT"
+        $CanonicalStatus = if ($Status -ceq 'PASS') { 'PASS' } else { 'NOT APPLICABLE' }
+        if ($TestSignals.Count -lt 1 -or
+            @($TestSignals | Where-Object { $_.canonical -cne $CanonicalStatus }).Count -ne 0) {
+            throw "Every WACK TEST direct STATUS/RESULT/OUTCOME signal must agree."
         }
-        $ResultValues.Add($Status)
-        $TestRows.Add([ordered]@{ index = $IndexText; name = $Name; status = $Status })
+        $ResultValues.Add($CanonicalStatus)
+        $TestRows.Add([ordered]@{ index = $IndexText; name = $Name; status = $CanonicalStatus })
     }
     $SortedRows = @($TestRows | Sort-Object { [System.Numerics.BigInteger]::Parse([string]$_.index, [Globalization.CultureInfo]::InvariantCulture) })
     foreach ($Node in @($ReportXml.SelectNodes("//*"))) {

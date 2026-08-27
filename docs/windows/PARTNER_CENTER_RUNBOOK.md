@@ -16,18 +16,23 @@ identity expected from Partner Center: **LAI ZEYU**.
    <https://learn.microsoft.com/en-us/windows/apps/publish/view-app-identity-details>.
 3. Confirm only `zh-CN` is declared and the English listing begins with the
    Simplified-Chinese-only disclosure.
-4. Set protected `AEGIS_APPROVED_WACK_FILE_VERSION` to the currently approved
-   four-part AppCert file version. As repository owner, manually dispatch the
+4. Set protected `AEGIS_APPROVED_WACK_FILE_VERSION`, `AEGIS_APPROVED_WACK_SHA256`,
+   `AEGIS_APPROVED_WACK_SIGNER_SUBJECT`, `AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT`,
+   `AEGIS_APPROVED_WACK_TEST_COUNT` and `AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256`
+   to one independently approved AppCert binary and complete TEST inventory.
+   As repository owner, manually dispatch the
    single Windows job from exact `main` on an elevated active desktop; require
    QA1, QA2, WACK1 and WACK2 evidence showing the same signed QA-copy hash and
    the same original unsigned-submission/payload-tree lineage.
 5. Open the privacy URL while signed out and compare every listing claim with
    the installed candidate.
-6. Require the protected workflow's four-file Store screenshot artifact. Its
+6. Require the protected workflow's four-file Store screenshot transfer artifact. Its
    distinct home/scenario/privacy/About views are captured by the exact installed
    candidate only after nonce-bound DOM/API validation, each must be at least
    1366x768, and the PNGs are uploaded only after certificate and private
-   build/WACK evidence cleanup. `docs/assets/dashboard-demo.png` is documentation
+   build/WACK evidence cleanup. Review and manually upload those exact four PNGs
+   in Partner Center; the Actions bundle itself is not Store submission,
+   certification or acceptance. `docs/assets/dashboard-demo.png` is documentation
    artwork, not Store evidence.
 7. Pre-provision a directory named exactly `AegisStoreHandoff` on a local fixed
    NTFS volume outside the checkout, runner temp and every OneDrive root. Disable
@@ -57,8 +62,11 @@ Backup automatically:
    to GitHub or retains the QA certificate/copy; the separate GitHub workflow publishes only its
    non-Store portable ZIP and checksum.
 5. After QA, uninstall the app and verify the PFN/LocalState directory is gone.
-   Delete the local temporary certificate only by its validated exact
-   thumbprint.
+   Delete the exact `CurrentUser\My` development certificate with
+   `Remove-Item -DeleteKey`, bound to its validated thumbprint and current-user
+   software-CNG key name/unique name/provider. Require the post-cleanup CNG file
+   inventory to equal the pre-create baseline; remove the Root/TrustedPeople
+   public copies only by that same thumbprint.
 
 Record this as a manual privacy/release gate; do not claim the application can
 change a user's OneDrive or Windows Backup settings itself.

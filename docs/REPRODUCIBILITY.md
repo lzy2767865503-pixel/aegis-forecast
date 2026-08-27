@@ -27,8 +27,10 @@ one technical-Publisher development MSIX from the reserved Identity Name. It
 then runs native QA rounds 1 and 2 sequentially,
 followed by strict WACK reset/test, without rebuilding, resigning, downloading,
 or copying the candidate between rounds. Every stage verifies the same SHA-256
-before and after use. The Store workflow uploads no Actions artifact; it writes
-only a fixed Job Summary after strict private schema validation.
+before and after use. The Store workflow uploads no package/private-evidence
+artifact; after strict validation and cleanup it writes a fixed Job Summary and
+may upload only four privacy-validated exact-candidate PNGs as a short-lived
+operator transfer bundle, never as a claim of Store acceptance.
 
 See `docs/windows/TWO_PASS_QA.md`. PyInstaller is not a cross-compiler; macOS
 freezing cannot be reported as Windows/Store certification.

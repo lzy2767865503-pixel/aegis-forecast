@@ -310,6 +310,16 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("AEGIS_APPROVED_WACK_FILE_VERSION", workflow)
+        for protected_wack_value in (
+            "AEGIS_APPROVED_WACK_SHA256",
+            "AEGIS_APPROVED_WACK_SIGNER_SUBJECT",
+            "AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT",
+            "AEGIS_APPROVED_WACK_TEST_COUNT",
+            "AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256",
+        ):
+            self.assertIn(protected_wack_value, workflow)
+        self.assertIn("Remove-Item -LiteralPath $ExactPath -DeleteKey", (root / "scripts/windows/remove-development-certificate.ps1").read_text(encoding="utf-8"))
+        self.assertIn("postCleanupCngKeyFiles", workflow)
         self.assertIn("required_status_checks", workflow)
         self.assertIn("integration_id -ne 15368", workflow)
         self.assertIn("'verify (3.10)', 'verify (3.12)'", workflow)
@@ -372,7 +382,13 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("cngProviderBaselineRestored", signer_job)
         self.assertIn("privateKeyBaselineRestored", signer_job)
         self.assertIn("deleteKeyAttempted", signer_job)
+        self.assertIn("deleteKeySucceeded", signer_job)
         self.assertIn("machineGuidSha256", signer_job)
+        self.assertIn("signerRunnerName", signer_job)
+        self.assertIn("signer-vault", signer_job)
+        self.assertIn("[IO.Directory]::Move($IngressRun, $VaultClaiming)", signer_job)
+        self.assertIn("[IO.FileShare]::Read", signer_job)
+        self.assertIn("archiveEntryInventorySha256", signer_job)
         publisher = release.split("  publish-release:", 1)[1]
         self.assertNotIn("actions/checkout", publisher)
         self.assertIn("contents: write", publisher)
@@ -465,6 +481,8 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("approvedWackFileVersion", wack)
         self.assertIn("appcertSha256", wack)
         self.assertIn("testInventorySha256", wack)
+        self.assertIn("immediately before execution", wack)
+        self.assertIn("[IO.FileShare]::Read", wack)
         self.assertNotIn("Preflight proved that none", wack)
         wack_policy = (root / "scripts/windows/wack-report-policy.ps1").read_text(
             encoding="utf-8"
@@ -472,6 +490,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn('GetAttribute("LATEST_VERSION")', wack_policy)
         self.assertIn('GetAttribute("VERSION")', wack_policy)
         self.assertIn("WACK TEST INDEX and NAME values must each be unique", wack_policy)
+        self.assertIn("conflicting direct STATUS/RESULT/OUTCOME", wack_policy)
         self.assertIn("testInventorySha256", wack_policy)
         cka_setup = (root / "scripts/windows/setup-esigner-cka.ps1").read_text(
             encoding="utf-8"
@@ -504,6 +523,14 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("DriveFormat -cne 'NTFS'", signing_handoff)
         self.assertIn("machineGuidSha256", signing_handoff)
         self.assertIn("githubArtifactUploaded = $false", signing_handoff)
+        self.assertIn("build account SID must match and must not be a local Administrator", signing_handoff)
+        self.assertIn("ingress", signing_handoff)
+        self.assertIn("signer-vault", signing_handoff)
+        portable_archive = (
+            root / "scripts/windows/verify-portable-archive.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("implicit directory case collision", portable_archive)
+        self.assertIn("full extraction node inventory differs", portable_archive)
         signature_policy = (root / "scripts/windows/verify-github-signatures.ps1").read_text(
             encoding="utf-8"
         )
