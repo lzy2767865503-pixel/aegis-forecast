@@ -496,6 +496,8 @@ class StorePackageBoundaryTests(unittest.TestCase):
             "ToLowerInvariant()",
             '$Languages.Count -ne 1 -or $Languages[0] -cne "zh-cn"',
             "Microsoft SPDX SBOM generation",
+            "Microsoft SPDX SHA-256 sidecar does not match",
+            '".sha256"',
             "staticValidationPasses = 2",
             "runtimeLifecyclePasses = 2",
             'submissionSignatureStatus = "UNSIGNED_FOR_PARTNER_CENTER"',

@@ -200,6 +200,16 @@ try {
     }
     $SpdxFiles = @(Get-ChildItem -LiteralPath $ManifestRoot -File -Force -Recurse -Filter "manifest.spdx.json")
     if ($SpdxFiles.Count -ne 1) { throw "Expected one Microsoft SPDX manifest." }
+    $SpdxHashPath = "$($SpdxFiles[0].FullName).sha256"
+    $ManifestFiles = @(Get-ChildItem -LiteralPath $ManifestRoot -File -Force -Recurse)
+    if ($ManifestFiles.Count -ne 2 -or -not (Test-Path -LiteralPath $SpdxHashPath -PathType Leaf)) {
+        throw "Microsoft SPDX output must contain only the manifest and its SHA-256 sidecar."
+    }
+    $RecordedSpdxHash = (Get-Content -Raw -LiteralPath $SpdxHashPath).Trim().ToLowerInvariant()
+    $ActualSpdxHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SpdxFiles[0].FullName).Hash.ToLowerInvariant()
+    if ($RecordedSpdxHash -cnotmatch "^[0-9a-f]{64}$" -or $RecordedSpdxHash -cne $ActualSpdxHash) {
+        throw "Microsoft SPDX SHA-256 sidecar does not match the generated manifest."
+    }
     $Spdx = Get-Content -Raw -LiteralPath $SpdxFiles[0].FullName | ConvertFrom-Json
     if ($Spdx.spdxVersion -cne "SPDX-2.2" -or $Spdx.dataLicense -cne "CC0-1.0" -or
         @($Spdx.files).Count -lt 1 -or @($Spdx.packages).Count -lt 1) {
@@ -301,7 +311,7 @@ try {
     Assert-SafeTree $Output "Partner Center upload bundle"
     $BundleFiles = @(Get-ChildItem -LiteralPath $Output -File -Force -Recurse)
     if (@($BundleFiles | Where-Object Extension -CEQ ".msix").Count -ne 1 -or
-        @($BundleFiles | Where-Object { $_.Extension -cnotin @(".msix", ".json", ".png", ".txt") }).Count -ne 0 -or
+        @($BundleFiles | Where-Object { $_.Extension -cnotin @(".msix", ".json", ".png", ".txt", ".sha256") }).Count -ne 0 -or
         @($BundleFiles | Where-Object { $_.Name -match "(?i)(signed-dev|\.cer$|\.pfx$)" }).Count -ne 0) {
         throw "Partner Center upload bundle contains an unapproved file type or development artifact."
     }
