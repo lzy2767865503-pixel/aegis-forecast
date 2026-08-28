@@ -348,7 +348,8 @@ try {
     $OwnershipMarkerPath = Join-Path $LocalState ".quant-scenario-localstate.json"
     New-Item -ItemType Directory -Path $Runtime -Force | Out-Null
     $ReadyMarker = Join-Path $Runtime "ui_ready.json"
-    if (Test-Path $ReadyMarker) { throw "Readiness marker existed before candidate launch." }
+    $FailureMarker = Join-Path $Runtime "ui_failure.json"
+    if ((Test-Path $ReadyMarker) -or (Test-Path $FailureMarker)) { throw "QA marker existed before candidate launch." }
     [ordered]@{
         packageSha256 = $PackageHash
         sourceCommit = $SourceCommit
@@ -360,6 +361,26 @@ try {
     Start-Process explorer.exe "shell:AppsFolder\$InstalledFamilyName!App"
     $Marker = $null
     for ($Attempt = 0; $Attempt -lt 180; $Attempt++) {
+        if (Test-Path $FailureMarker) {
+            $Failure = $null
+            try { $Failure = Get-Content -Raw -LiteralPath $FailureMarker | ConvertFrom-Json } catch { $Failure = $null }
+            if ($Failure) {
+                $FailureKeys = @($Failure.PSObject.Properties.Name | Sort-Object)
+                if (($FailureKeys -join '|') -cne 'capturedAt|error|nonce|packageSha256|product|qaRound|sourceCommit' -or
+                    $Failure.product -cne $ExpectedProduct -or $Failure.sourceCommit -cne $SourceCommit -or
+                    $Failure.packageSha256 -cne $PackageHash -or $Failure.qaRound -cne $QaRound -or
+                    $Failure.nonce -cne $ExpectedRequest.nonce -or [string]$Failure.nonce -cnotmatch '^[0-9a-f]{64}$' -or
+                    [string]::IsNullOrWhiteSpace([string]$Failure.error) -or [string]$Failure.error -match '[\r\n]' -or
+                    ([string]$Failure.error).Length -gt 2048) {
+                    throw "Packaged app emitted a malformed or unbound QA failure marker."
+                }
+                $FailureCapturedAt = [DateTimeOffset]::ParseExact([string]$Failure.capturedAt, "o", [Globalization.CultureInfo]::InvariantCulture)
+                if ($FailureCapturedAt -lt [DateTimeOffset]::UtcNow.AddMinutes(-3) -or $FailureCapturedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(1)) {
+                    throw "Packaged app QA failure marker is stale or future-dated."
+                }
+                throw "Packaged app reported native QA failure: $([string]$Failure.error)"
+            }
+        }
         if (Test-Path $ReadyMarker) {
             try { $Marker = Get-Content -Raw -LiteralPath $ReadyMarker | ConvertFrom-Json } catch { $Marker = $null }
             if ($Marker) { break }

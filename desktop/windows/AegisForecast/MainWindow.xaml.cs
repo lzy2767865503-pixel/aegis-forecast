@@ -465,11 +465,67 @@ public sealed partial class MainWindow : Window
 
     private void ShowFailure(string message)
     {
+        WriteQaFailureMarker(message);
         StopBackend();
         Browser.Visibility = Visibility.Collapsed;
         StatusPanel.Visibility = Visibility.Visible;
         Progress.IsActive = false;
         StatusText.Text = message;
+    }
+
+    private void WriteQaFailureMarker(string message)
+    {
+        try
+        {
+            (string dataRoot, _, _) = RuntimeIdentity();
+            string runtime = Path.Combine(dataRoot, "runtime");
+            string expectedPath = Path.Combine(runtime, "qa_expected.json");
+            // This diagnostic exists only for an explicit nonce-bound native QA
+            // launch. Normal Store users never have qa_expected.json.
+            if (!File.Exists(expectedPath))
+            {
+                return;
+            }
+            using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(expectedPath));
+            JsonElement values = expected.RootElement;
+            string packageSha256 = values.GetProperty("packageSha256").GetString() ?? "";
+            string expectedCommit = values.GetProperty("sourceCommit").GetString() ?? "";
+            string qaRound = values.GetProperty("qaRound").GetString() ?? "";
+            string nonce = values.GetProperty("nonce").GetString() ?? "";
+            if (!System.Text.RegularExpressions.Regex.IsMatch(packageSha256, "^[0-9a-f]{64}$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(expectedCommit, "^[0-9a-f]{40}$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(qaRound, "^[12]$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(nonce, "^[0-9a-f]{64}$"))
+            {
+                return;
+            }
+            string safeMessage = _sessionToken is string sessionToken && sessionToken.Length > 0
+                ? message.Replace(sessionToken, "[redacted]", StringComparison.Ordinal)
+                : message;
+            safeMessage = safeMessage.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (safeMessage.Length > 2048)
+            {
+                safeMessage = safeMessage[..2048];
+            }
+            var marker = new
+            {
+                product = ProductName,
+                sourceCommit = SourceCommit(),
+                packageSha256,
+                qaRound,
+                nonce,
+                error = safeMessage,
+                capturedAt = DateTimeOffset.UtcNow.ToString("o"),
+            };
+            string markerPath = Path.Combine(runtime, "ui_failure.json");
+            string temporary = markerPath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(marker));
+            File.Move(temporary, markerPath, overwrite: true);
+        }
+        catch (Exception error)
+        {
+            Debug.WriteLine($"[Aegis QA diagnostic] {error.GetType().Name}: {error.Message}");
+        }
     }
 
     private async Task<Uri> StartBackendAsync()
@@ -612,11 +668,7 @@ public sealed partial class MainWindow : Window
         };
         Browser.CoreWebView2.ProcessFailed += (_, _) =>
         {
-            StopBackend();
-            Browser.Visibility = Visibility.Collapsed;
-            StatusPanel.Visibility = Visibility.Visible;
-            Progress.IsActive = false;
-            StatusText.Text = "WebView2 进程异常退出，请重新启动应用。";
+            ShowFailure("WebView2 进程异常退出，请重新启动应用。");
         };
     }
 

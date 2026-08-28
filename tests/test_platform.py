@@ -617,6 +617,17 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("application/vnd.ms-pkiseccat", equivalence)
         self.assertIn("must add exactly one signature mapping and one CodeIntegrity.cat mapping", equivalence)
         self.assertIn("SignTool changed an existing content-type mapping", equivalence)
+        native_qa = (root / "scripts/windows/verify-native.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ui_failure.json", native_qa)
+        self.assertIn("malformed or unbound QA failure marker", native_qa)
+        self.assertIn("Packaged app reported native QA failure", native_qa)
+        native_shell = (
+            root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WriteQaFailureMarker", native_shell)
+        self.assertIn("Normal Store users never have qa_expected.json", native_shell)
         handoff = (root / "scripts/windows/prepare-store-handoff.ps1").read_text(
             encoding="utf-8"
         )
