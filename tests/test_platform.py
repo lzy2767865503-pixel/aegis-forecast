@@ -526,6 +526,13 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("CapturePreviewAsync", shell)
         self.assertIn("AsRandomAccessStream", shell)
         self.assertIn("GetDpiForWindow(window) != 96", shell)
+        self.assertIn("Browser.Width = storeScreenshotWidth", shell)
+        self.assertIn("Browser.Height = storeScreenshotHeight", shell)
+        self.assertIn("width != storeScreenshotWidth", shell)
+        self.assertLess(
+            shell.index("Browser.Width = storeScreenshotWidth"),
+            shell.index("await Browser.CoreWebView2.CapturePreviewAsync"),
+        )
         self.assertIn("storeListingScreenshotPrivacyValidated = true", shell)
         self.assertIn("screenshots.Count != 4", shell)
         wack = (root / "scripts/windows/verify-wack.ps1").read_text(encoding="utf-8")

@@ -313,14 +313,42 @@ public sealed partial class MainWindow : Window
             throw new InvalidOperationException("商城截图只能由已验证的 WebView2 会话生成");
         }
 
+        const int storeScreenshotWidth = 1600;
+        const int storeScreenshotHeight = 900;
         nint window = WinRT.Interop.WindowNative.GetWindowHandle(this);
         const uint noMoveNoZOrderNoActivate = 0x0002 | 0x0004 | 0x0010;
-        if (window == 0 || GetDpiForWindow(window) != 96
-            || !SetWindowPos(window, 0, 0, 0, 1600, 900, noMoveNoZOrderNoActivate))
+        if (window == 0 || GetDpiForWindow(window) != 96)
+        {
+            throw new InvalidOperationException("商城截图要求受控 Windows 桌面为 100% 缩放");
+        }
+
+        // A hosted Windows desktop may expose a smaller physical screen even
+        // though SetWindowPos succeeds. Give WebView2 an explicit 1600x900
+        // QA-only render surface so CapturePreviewAsync is independent of the
+        // runner's visible desktop bounds. Normal Store launches never enter
+        // this method because they do not contain qa_expected.json.
+        Browser.Width = storeScreenshotWidth;
+        Browser.Height = storeScreenshotHeight;
+        Browser.HorizontalAlignment = HorizontalAlignment.Left;
+        Browser.VerticalAlignment = VerticalAlignment.Top;
+        if (!SetWindowPos(
+                window,
+                0,
+                0,
+                0,
+                storeScreenshotWidth,
+                storeScreenshotHeight,
+                noMoveNoZOrderNoActivate))
         {
             throw new InvalidOperationException("商城截图要求受控 Windows 桌面为 100% 缩放且窗口可调整到 1600×900");
         }
         await Task.Delay(1000);
+        if (Math.Abs(Browser.ActualWidth - storeScreenshotWidth) > 0.5
+            || Math.Abs(Browser.ActualHeight - storeScreenshotHeight) > 0.5)
+        {
+            throw new InvalidOperationException(
+                $"商城截图 WebView2 画布不是 1600×900：{Browser.ActualWidth:0.##}×{Browser.ActualHeight:0.##}");
+        }
 
         var specifications = new[]
         {
@@ -438,9 +466,9 @@ public sealed partial class MainWindow : Window
             }
             int width = (header[16] << 24) | (header[17] << 16) | (header[18] << 8) | header[19];
             int height = (header[20] << 24) | (header[21] << 16) | (header[22] << 8) | header[23];
-            if (width < 1366 || height < 768 || width > 4096 || height > 2160)
+            if (width != storeScreenshotWidth || height != storeScreenshotHeight)
             {
-                throw new InvalidOperationException("商城截图必须在 1366×768 到 4096×2160 的受控范围内");
+                throw new InvalidOperationException($"商城截图 PNG 不是 1600×900：{width}×{height}");
             }
             string sha256;
             await using (FileStream stream = File.OpenRead(screenshotPath))
