@@ -605,6 +605,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("RevocationMode", trusted_sdk)
         self.assertIn("FileVersionRaw", trusted_sdk)
         self.assertIn("$Current = $Tool.Directory", trusted_sdk)
+        self.assertIn("[StringComparison]::OrdinalIgnoreCase", trusted_sdk)
         equivalence = (root / "scripts/windows/msix-payload-equivalence.ps1").read_text(
             encoding="utf-8"
         )

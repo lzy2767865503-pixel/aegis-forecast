@@ -53,8 +53,12 @@ function Assert-AegisTrustedMicrosoftTool {
         }
         $Current = $Current.Parent
     }
+    $OriginalFilenameMatches = ([string]$Tool.VersionInfo.OriginalFilename).Equals(
+        $Tool.Name,
+        [StringComparison]::OrdinalIgnoreCase
+    )
     if (-not $ReachedRoot -or $Tool.VersionInfo.CompanyName -cne "Microsoft Corporation" -or
-        $Tool.VersionInfo.OriginalFilename -cne $Tool.Name) {
+        -not $OriginalFilenameMatches) {
         throw "$Label is outside the exact Windows Kits root or lacks Microsoft Corporation metadata."
     }
     $Signature = Get-AuthenticodeSignature -LiteralPath $Tool.FullName
