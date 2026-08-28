@@ -90,6 +90,12 @@ if ($Equivalence.payloadTreeSha256 -cne $Candidate.payloadTreeSha256 -or
 
 & scripts\windows\backend-hashes.ps1 -Mode Verify
 
+$ExpectedScreenshotRows = @(
+    [ordered]@{ fileName = 'store-listing-home.png'; view = 'home'; heading = 'Nasdaq-100 说明性合成情景' },
+    [ordered]@{ fileName = 'store-listing-scenarios.png'; view = 'scenarios'; heading = 'Nasdaq-100 研究排名' },
+    [ordered]@{ fileName = 'store-listing-privacy.png'; view = 'privacy'; heading = '隐私与本地数据' },
+    [ordered]@{ fileName = 'store-listing-about.png'; view = 'about'; heading = '关于 Quant Scenario Studio' }
+)
 $QaSummaries = @()
 for ($Round = 1; $Round -le 2; $Round++) {
     $Summary = Get-Content -Raw -LiteralPath (Join-Path $QaRoot "round-$Round\lifecycle-dom-api-uninstall.json") | ConvertFrom-Json
@@ -101,7 +107,11 @@ for ($Round = 1; $Round -le 2; $Round++) {
         "installLocation", "shellProcessId", "backendProcessId", "shellExecutablePath",
         "backendExecutablePath", "shellForceKilled", "sidecarExitedViaParentWatchdog",
         "packageAbsentAfterUninstall", "pfnAndLocalStateAbsentAfterUninstall",
-        "fallbackLocalStateAbsentAfterUninstall", "markerBoundLocalStateValidated", "capturedAt"
+        "fallbackLocalStateAbsentAfterUninstall", "markerBoundLocalStateValidated",
+        "storeListingScreenshotFile", "storeListingScreenshotSha256", "storeListingScreenshotWidth",
+        "storeListingScreenshotHeight", "storeListingScreenshotView", "storeListingScreenshotPrivacyValidated",
+        "storeListingScreenshotCount", "storeListingScreenshots",
+        "capturedAt"
     ) "QA round $Round lifecycle"
     if ([string]$Summary.qaRound -cne [string]$Round -or $Summary.product -cne $ExpectedProduct -or
         $Summary.author -cne $ExpectedAuthor -or $Summary.technicalPublisher -cne $ExpectedPublisher -or
@@ -113,8 +123,39 @@ for ($Round = 1; $Round -le 2; $Round++) {
         -not $Summary.apiHealthValidated -or -not $Summary.coreDataValidated -or -not $Summary.domDataReady -or
         -not $Summary.shellForceKilled -or -not $Summary.sidecarExitedViaParentWatchdog -or
         -not $Summary.packageAbsentAfterUninstall -or -not $Summary.pfnAndLocalStateAbsentAfterUninstall -or
-        -not $Summary.fallbackLocalStateAbsentAfterUninstall -or -not $Summary.markerBoundLocalStateValidated) {
+        -not $Summary.fallbackLocalStateAbsentAfterUninstall -or -not $Summary.markerBoundLocalStateValidated -or
+        [string]$Summary.storeListingScreenshotFile -cne 'store-listing-home.png' -or
+        [string]$Summary.storeListingScreenshotSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [int]$Summary.storeListingScreenshotWidth -lt 1366 -or [int]$Summary.storeListingScreenshotWidth -gt 4096 -or
+        [int]$Summary.storeListingScreenshotHeight -lt 768 -or [int]$Summary.storeListingScreenshotHeight -gt 2160 -or
+        [string]$Summary.storeListingScreenshotView -cne 'home' -or
+        -not $Summary.storeListingScreenshotPrivacyValidated -or [int]$Summary.storeListingScreenshotCount -ne 4 -or
+        @($Summary.storeListingScreenshots).Count -ne 4) {
         throw "QA round $Round does not prove unchanged bytes and a clean nonce-bound lifecycle."
+    }
+    $ScreenshotRows = @($Summary.storeListingScreenshots)
+    $SeenScreenshotHashes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for ($ScreenshotIndex = 0; $ScreenshotIndex -lt $ExpectedScreenshotRows.Count; $ScreenshotIndex++) {
+        $ExpectedScreenshot = $ExpectedScreenshotRows[$ScreenshotIndex]
+        $Screenshot = $ScreenshotRows[$ScreenshotIndex]
+        Assert-ExactSchema $Screenshot @('fileName', 'sha256', 'width', 'height', 'view', 'heading', 'privacyValidated') "QA round $Round screenshot $ScreenshotIndex"
+        if ([string]$Screenshot.fileName -cne [string]$ExpectedScreenshot.fileName -or
+            [string]$Screenshot.view -cne [string]$ExpectedScreenshot.view -or
+            [string]$Screenshot.heading -cne [string]$ExpectedScreenshot.heading -or
+            [string]$Screenshot.sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $Screenshot.privacyValidated -or
+            -not $SeenScreenshotHashes.Add([string]$Screenshot.sha256) -or
+            [int]$Screenshot.width -ne [int]$Summary.storeListingScreenshotWidth -or
+            [int]$Screenshot.height -ne [int]$Summary.storeListingScreenshotHeight) {
+            throw "QA round $Round Store screenshot inventory is malformed, duplicated or dimensionally inconsistent."
+        }
+        $ScreenshotPath = Join-Path $QaRoot "round-$Round\$([string]$ExpectedScreenshot.fileName)"
+        if (-not (Test-Path -LiteralPath $ScreenshotPath -PathType Leaf) -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $ScreenshotPath).Hash.ToLowerInvariant() -cne [string]$Screenshot.sha256) {
+            throw "QA round $Round Store listing screenshot is missing or differs from its exact candidate marker."
+        }
+    }
+    if ($Summary.storeListingScreenshotSha256 -cne [string]$ScreenshotRows[0].sha256) {
+        throw "QA round $Round home screenshot compatibility fields disagree with the four-view inventory."
     }
     Assert-Hash $Summary.nonce 64 "QA round $Round nonce"
     $Static = Get-Content -Raw -LiteralPath (Join-Path $QaRoot "round-$Round\static-package-validation.json") | ConvertFrom-Json
@@ -137,6 +178,14 @@ for ($Round = 1; $Round -le 2; $Round++) {
     $QaSummaries += $Summary
 }
 if ($QaSummaries[0].nonce -ceq $QaSummaries[1].nonce) { throw "QA rounds must use distinct launch nonces." }
+foreach ($ScreenshotField in @(
+    "storeListingScreenshotFile", "storeListingScreenshotWidth", "storeListingScreenshotHeight",
+    "storeListingScreenshotView", "storeListingScreenshotPrivacyValidated", "storeListingScreenshotCount"
+)) {
+    if ([string]$QaSummaries[0].$ScreenshotField -cne [string]$QaSummaries[1].$ScreenshotField) {
+        throw "The two exact-candidate Store screenshot rounds disagree on $ScreenshotField."
+    }
+}
 
 $WackSummaries = @()
 for ($Round = 1; $Round -le 2; $Round++) {
@@ -146,11 +195,15 @@ for ($Round = 1; $Round -le 2; $Round++) {
         "packageSha256Before", "packageSha256After", "submissionPackageSha256", "payloadTreeSha256",
         "submissionPayloadEquivalent", "appcertResetExitCode", "appcertTestExitCode",
         "appcertReset", "appcertTest", "partialRun", "wackPackageFullName", "wackInstallLocation", "report", "reportSha256",
-        "powershellTranscriptSha256", "appcertConsoleSha256", "resultCount", "overallResults",
-        "hardTimeoutEnforced", "interactiveSessionId", "elevatedAdministrator", "wackFileVersion",
+        "powershellTranscriptSha256", "appcertConsoleSha256", "resultCount", "overallResults", "testCount",
+        "testInventorySha256", "reportLatestVersion", "reportVersion", "hardTimeoutEnforced",
+        "interactiveSessionId", "elevatedAdministrator", "approvedWackFileVersion", "wackFileVersion",
+        "approvedWackSha256", "approvedWackSignerSubject", "approvedWackSignerThumbprint",
+        "approvedWackTestCount", "approvedWackTestInventorySha256",
+        "appcertProductVersion", "appcertSha256", "appcertSignerSubject", "appcertSignerThumbprint", "appcertTimestampThumbprint",
         "noRuntimeResidue", "capturedAt"
     ) "WACK round $Round summary"
-    if ($Wack.schemaVersion -ne 3 -or [string]$Wack.wackRound -cne [string]$Round -or
+    if ($Wack.schemaVersion -ne 5 -or [string]$Wack.wackRound -cne [string]$Round -or
         $Wack.product -cne $ExpectedProduct -or $Wack.author -cne $ExpectedAuthor -or
         $Wack.technicalPublisher -cne $ExpectedPublisher -or $Wack.sourceCommit -cne $Candidate.sourceCommit -or
         $Wack.packageSha256Before -cne $Candidate.packageSha256 -or $Wack.packageSha256After -cne $Candidate.packageSha256 -or
@@ -159,8 +212,23 @@ for ($Round = 1; $Round -le 2; $Round++) {
         $Wack.appcertResetExitCode -ne 0 -or $Wack.appcertTestExitCode -ne 0 -or
         $Wack.appcertReset -cne "PASS" -or $Wack.appcertTest -cne "PASS" -or $Wack.partialRun -or
         -not $Wack.hardTimeoutEnforced -or [int]$Wack.interactiveSessionId -eq 0 -or
-        -not $Wack.elevatedAdministrator -or [string]$Wack.wackFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
-        [string]$Wack.wackFileVersion -cne [string]$env:AEGIS_APPROVED_WACK_FILE_VERSION -or -not $Wack.noRuntimeResidue) {
+        -not $Wack.elevatedAdministrator -or -not $Wack.reportLatestVersion -or
+        [string]$Wack.approvedWackFileVersion -cne [string]$env:AEGIS_APPROVED_WACK_FILE_VERSION -or
+        [string]$Wack.approvedWackSha256 -cne [string]$env:AEGIS_APPROVED_WACK_SHA256 -or
+        [string]$Wack.approvedWackSignerSubject -cne [string]$env:AEGIS_APPROVED_WACK_SIGNER_SUBJECT -or
+        [string]$Wack.approvedWackSignerThumbprint -cne [string]$env:AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT -or
+        [int]$Wack.approvedWackTestCount -ne [int]$env:AEGIS_APPROVED_WACK_TEST_COUNT -or
+        [string]$Wack.approvedWackTestInventorySha256 -cne [string]$env:AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256 -or
+        [string]$Wack.wackFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
+        [string]$Wack.wackFileVersion -cne [string]$Wack.approvedWackFileVersion -or
+        [string]$Wack.reportVersion -cne [string]$Wack.approvedWackFileVersion -or
+        [string]$Wack.appcertSha256 -cne [string]$Wack.approvedWackSha256 -or
+        [string]$Wack.appcertSignerSubject -cne [string]$Wack.approvedWackSignerSubject -or
+        [string]$Wack.appcertSignerThumbprint -cne [string]$Wack.approvedWackSignerThumbprint -or
+        [int]$Wack.testCount -ne [int]$Wack.approvedWackTestCount -or
+        [string]$Wack.testInventorySha256 -cne [string]$Wack.approvedWackTestInventorySha256 -or
+        [string]::IsNullOrWhiteSpace([string]$Wack.appcertProductVersion) -or
+        [int]$Wack.testCount -lt 1 -or -not $Wack.noRuntimeResidue) {
         throw "WACK round $Round summary does not prove a fresh, bounded, complete PASS on the common candidate lineage."
     }
     if ($Wack.wackPackageFullName -cnotmatch "^$([regex]::Escape($Candidate.packageIdentity))_" -or
@@ -168,11 +236,28 @@ for ($Round = 1; $Round -le 2; $Round++) {
         throw "WACK round $Round is not bound to the tested PackageFullName/install location."
     }
     $WackResults = @($Wack.overallResults)
-    if ($WackResults.Count -lt 2 -or [int]$Wack.resultCount -ne $WackResults.Count -or @($WackResults | Where-Object { $_ -cne "PASS" }).Count -ne 0) {
+    $AllowedWackResults = @('PASS', 'PASSED', 'NOT APPLICABLE', 'N A', 'NA')
+    if ($WackResults.Count -lt 2 -or [int]$Wack.resultCount -ne $WackResults.Count -or
+        [int]$Wack.testCount -ne ($WackResults.Count - 1) -or
+        @($WackResults | Where-Object { $_ -cnotin $AllowedWackResults }).Count -ne 0) {
         throw "WACK round $Round contains a missing, skipped, warning, not-run or failed result."
     }
-    foreach ($HashField in @("reportSha256", "powershellTranscriptSha256", "appcertConsoleSha256")) { Assert-Hash ([string]$Wack.$HashField) 64 "WACK round $Round $HashField" }
+    foreach ($HashField in @("reportSha256", "powershellTranscriptSha256", "appcertConsoleSha256", "testInventorySha256", "appcertSha256")) {
+        Assert-Hash ([string]$Wack.$HashField) 64 "WACK round $Round $HashField"
+    }
+    foreach ($ThumbprintField in @("appcertSignerThumbprint", "appcertTimestampThumbprint")) {
+        Assert-Hash ([string]$Wack.$ThumbprintField) 40 "WACK round $Round $ThumbprintField"
+    }
     $WackSummaries += $Wack
+}
+foreach ($BoundField in @(
+    "approvedWackFileVersion", "approvedWackSha256", "approvedWackSignerSubject", "approvedWackSignerThumbprint",
+    "approvedWackTestCount", "approvedWackTestInventorySha256", "wackFileVersion", "appcertProductVersion", "appcertSha256",
+    "appcertSignerSubject", "appcertSignerThumbprint", "appcertTimestampThumbprint", "reportVersion", "testCount", "testInventorySha256"
+)) {
+    if ([string]$WackSummaries[0].$BoundField -cne [string]$WackSummaries[1].$BoundField) {
+        throw "The two WACK rounds are not bound to one exact approved AppCert binary and complete TEST inventory: $BoundField."
+    }
 }
 
 dotnet tool restore
@@ -184,7 +269,7 @@ Assert-NativeSuccess "Microsoft SPDX SBOM generation"
 if (-not (Test-Path -LiteralPath $ManifestRoot)) { throw "Private SBOM generation failed." }
 
 $Canonical = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     product = $ExpectedProduct
     author = $ExpectedAuthor
     publisherDisplayName = "LAI ZEYU"
@@ -200,6 +285,12 @@ $Canonical = [ordered]@{
     wack2PackageSha256 = $WackSummaries[1].packageSha256After
     wack1ReportSha256 = $WackSummaries[0].reportSha256
     wack2ReportSha256 = $WackSummaries[1].reportSha256
+    approvedWackFileVersion = $WackSummaries[0].approvedWackFileVersion
+    approvedWackSha256 = $WackSummaries[0].approvedWackSha256
+    approvedWackSignerSubject = $WackSummaries[0].approvedWackSignerSubject
+    approvedWackSignerThumbprint = $WackSummaries[0].approvedWackSignerThumbprint
+    approvedWackTestCount = [int]$WackSummaries[0].approvedWackTestCount
+    approvedWackTestInventorySha256 = $WackSummaries[0].approvedWackTestInventorySha256
     qaRounds = @("PASS", "PASS")
     wackRounds = @("PASS", "PASS")
     binariesPublished = $false

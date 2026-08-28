@@ -34,7 +34,13 @@ function Assert-AegisTrustedMicrosoftTool {
         [Parameter(Mandatory = $true)][string]$Label
     )
     $ExactKitsRoot = [IO.Path]::GetFullPath($WindowsKitsRoot).TrimEnd("\")
-    $Current = $Tool
+    $ToolPath = [IO.Path]::GetFullPath($Tool.FullName)
+    if (($Tool.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label path contains a reparse point: $ToolPath"
+    }
+    # FileInfo does not expose Parent. Start the ancestor walk at its
+    # DirectoryInfo so the same fail-closed reparse check works in PowerShell 7.
+    $Current = $Tool.Directory
     $ReachedRoot = $false
     while ($Current) {
         $CurrentPath = [IO.Path]::GetFullPath($Current.FullName).TrimEnd("\")
@@ -47,8 +53,12 @@ function Assert-AegisTrustedMicrosoftTool {
         }
         $Current = $Current.Parent
     }
+    $OriginalFilenameMatches = ([string]$Tool.VersionInfo.OriginalFilename).Equals(
+        $Tool.Name,
+        [StringComparison]::OrdinalIgnoreCase
+    )
     if (-not $ReachedRoot -or $Tool.VersionInfo.CompanyName -cne "Microsoft Corporation" -or
-        $Tool.VersionInfo.OriginalFilename -cne $Tool.Name) {
+        -not $OriginalFilenameMatches) {
         throw "$Label is outside the exact Windows Kits root or lacks Microsoft Corporation metadata."
     }
     $Signature = Get-AuthenticodeSignature -LiteralPath $Tool.FullName
@@ -98,11 +108,54 @@ function Get-AegisTrustedWindowsSdkTool {
     return Assert-AegisTrustedMicrosoftTool -Tool $Candidates[0] -WindowsKitsRoot $WindowsKitsRoot -Label $Name
 }
 
+function Assert-AegisValidAppPackageSignature {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedCertificateThumbprint,
+        [Parameter(Mandatory = $true)][string]$ExpectedCertificateSubject
+    )
+    if (-not $IsWindows) { throw "App-package signature verification requires Windows." }
+    $ExactPath = (Resolve-Path -LiteralPath $Path).Path
+    if ([IO.Path]::GetExtension($ExactPath).ToLowerInvariant() -cnotin @('.msix', '.appx')) {
+        throw "App-package signature verification requires one exact MSIX or APPX file."
+    }
+    $ExpectedThumbprint = $ExpectedCertificateThumbprint.Trim().ToUpperInvariant()
+    if ($ExpectedThumbprint -cnotmatch '^[0-9A-F]{40}$' -or
+        [string]::IsNullOrWhiteSpace($ExpectedCertificateSubject) -or
+        $ExpectedCertificateSubject.Length -gt 512 -or $ExpectedCertificateSubject -match '[\r\n]') {
+        throw "Expected app-package signer identity is malformed."
+    }
+    $Signature = Get-AuthenticodeSignature -LiteralPath $ExactPath
+    if ($Signature.Status -cnotin @(
+            [Management.Automation.SignatureStatus]::Valid,
+            [Management.Automation.SignatureStatus]::UnknownError
+        ) -or -not $Signature.SignerCertificate -or
+        $Signature.SignerCertificate.Thumbprint -cne $ExpectedThumbprint -or
+        $Signature.SignerCertificate.Subject -cne $ExpectedCertificateSubject) {
+        throw "App-package signature does not expose the exact expected signer certificate."
+    }
+    $Signtool = Get-AegisTrustedWindowsSdkTool -Name 'signtool.exe'
+    & $Signtool verify /pa /all /v $ExactPath | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft SignTool rejected the app-package signature with exit code $LASTEXITCODE."
+    }
+    return $Signature
+}
+
 function Get-AegisTrustedWindowsAppCertificationKit {
-    param([Parameter(Mandatory = $true)][string]$ApprovedFileVersion)
+    param(
+        [Parameter(Mandatory = $true)][string]$ApprovedFileVersion,
+        [Parameter(Mandatory = $true)][string]$ApprovedSha256,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerSubject,
+        [Parameter(Mandatory = $true)][string]$ApprovedSignerThumbprint
+    )
     if (-not $IsWindows) { throw "App Certification Kit resolution requires Windows." }
-    if ($ApprovedFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$') {
-        throw "Approved AppCert file version must be a four-part numeric version."
+    if ($ApprovedFileVersion -cnotmatch '^\d+\.\d+\.\d+\.\d+$' -or
+        $ApprovedSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $ApprovedSignerThumbprint -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]::IsNullOrWhiteSpace($ApprovedSignerSubject) -or
+        $ApprovedSignerSubject.Length -gt 512 -or $ApprovedSignerSubject -match '[\r\n]') {
+        throw "Protected AppCert file version, SHA-256, signer Subject, or signer thumbprint is malformed."
     }
     $WindowsKitsRoot = [IO.Path]::GetFullPath(
         (Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "Windows Kits\10")
@@ -116,8 +169,27 @@ function Get-AegisTrustedWindowsAppCertificationKit {
     if ($InstalledFileVersion -cne $ApprovedFileVersion) {
         throw "Installed AppCert file version $InstalledFileVersion differs from approved version $ApprovedFileVersion."
     }
+    $TrustedPath = Assert-AegisTrustedMicrosoftTool -Tool $Tool -WindowsKitsRoot $WindowsKitsRoot -Label "appcert.exe"
+    $Signature = Get-AuthenticodeSignature -LiteralPath $TrustedPath
+    $Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $TrustedPath).Hash.ToLowerInvariant()
+    $ProductVersion = [string]$Tool.VersionInfo.ProductVersion
+    if ($Sha256 -cnotmatch '^[0-9a-f]{64}$' -or [string]::IsNullOrWhiteSpace($ProductVersion) -or
+        -not $Signature.SignerCertificate -or -not $Signature.TimeStamperCertificate) {
+        throw "Approved AppCert tool version/hash/signature evidence is incomplete."
+    }
+    $SignerSubject = [string]$Signature.SignerCertificate.Subject
+    $SignerThumbprint = $Signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+    if ($Sha256 -cne $ApprovedSha256 -or $SignerSubject -cne $ApprovedSignerSubject -or
+        $SignerThumbprint -cne $ApprovedSignerThumbprint) {
+        throw "Installed AppCert hash or exact Authenticode signer identity differs from protected approval."
+    }
     return [pscustomobject]@{
-        path = Assert-AegisTrustedMicrosoftTool -Tool $Tool -WindowsKitsRoot $WindowsKitsRoot -Label "appcert.exe"
+        path = $TrustedPath
         fileVersion = $InstalledFileVersion
+        productVersion = $ProductVersion
+        sha256 = $Sha256
+        signerSubject = $SignerSubject
+        signerThumbprint = $SignerThumbprint
+        timestampThumbprint = $Signature.TimeStamperCertificate.Thumbprint.ToLowerInvariant()
     }
 }

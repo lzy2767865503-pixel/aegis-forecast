@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
 using Windows.ApplicationModel;
 using Windows.Storage;
+using Windows.Storage.Streams;
 
 namespace AegisForecast;
 
@@ -23,6 +24,20 @@ public sealed partial class MainWindow : Window
     private bool _coreDataValidated;
     private bool _uiReady;
     private readonly TaskCompletionSource<Uri> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        nint window,
+        nint insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(nint window);
 
     public MainWindow()
     {
@@ -124,10 +139,10 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            await WriteReadinessMarkerAsync();
-            _uiReady = true;
             Browser.Visibility = Visibility.Visible;
             StatusPanel.Visibility = Visibility.Collapsed;
+            await WriteReadinessMarkerAsync();
+            _uiReady = true;
         }
         catch (Exception error)
         {
@@ -231,6 +246,9 @@ public sealed partial class MainWindow : Window
             : throw new InvalidOperationException("无法识别已安装壳进程路径");
         string backendExecutablePath = Path.GetFullPath(_backend.StartInfo.FileName);
 
+        IReadOnlyList<StoreListingScreenshot> screenshots = await CaptureStoreListingScreenshotsAsync(runtime);
+        StoreListingScreenshot homeScreenshot = screenshots.Single(value => value.View == "home");
+
         var marker = new
         {
             product = ProductName,
@@ -255,6 +273,23 @@ public sealed partial class MainWindow : Window
             coreDataValidated = _coreDataValidated,
             domDataReady = true,
             navigationCompleted = true,
+            storeListingScreenshotFile = homeScreenshot.FileName,
+            storeListingScreenshotSha256 = homeScreenshot.Sha256,
+            storeListingScreenshotWidth = homeScreenshot.Width,
+            storeListingScreenshotHeight = homeScreenshot.Height,
+            storeListingScreenshotView = "home",
+            storeListingScreenshotPrivacyValidated = true,
+            storeListingScreenshotCount = screenshots.Count,
+            storeListingScreenshots = screenshots.Select(screenshot => new
+            {
+                fileName = screenshot.FileName,
+                sha256 = screenshot.Sha256,
+                width = screenshot.Width,
+                height = screenshot.Height,
+                view = screenshot.View,
+                heading = screenshot.Heading,
+                privacyValidated = true,
+            }).ToArray(),
             capturedAt = DateTimeOffset.UtcNow.ToString("o"),
         };
         string markerPath = Path.Combine(runtime, "ui_ready.json");
@@ -263,13 +298,262 @@ public sealed partial class MainWindow : Window
         File.Move(temporary, markerPath, overwrite: true);
     }
 
+    private sealed record StoreListingScreenshot(
+        string FileName,
+        string Sha256,
+        int Width,
+        int Height,
+        string View,
+        string Heading);
+
+    private async Task<IReadOnlyList<StoreListingScreenshot>> CaptureStoreListingScreenshotsAsync(string runtime)
+    {
+        if (Browser.CoreWebView2 is null || _sessionToken is null)
+        {
+            throw new InvalidOperationException("商城截图只能由已验证的 WebView2 会话生成");
+        }
+
+        const int storeScreenshotWidth = 1600;
+        const int storeScreenshotHeight = 900;
+        nint window = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        const uint noMoveNoZOrderNoActivate = 0x0002 | 0x0004 | 0x0010;
+        if (window == 0 || GetDpiForWindow(window) != 96)
+        {
+            throw new InvalidOperationException("商城截图要求受控 Windows 桌面为 100% 缩放");
+        }
+
+        // A hosted Windows desktop may expose a smaller physical screen even
+        // though SetWindowPos succeeds. Give WebView2 an explicit 1600x900
+        // QA-only render surface so CapturePreviewAsync is independent of the
+        // runner's visible desktop bounds. Normal Store launches never enter
+        // this method because they do not contain qa_expected.json.
+        Browser.Width = storeScreenshotWidth;
+        Browser.Height = storeScreenshotHeight;
+        Browser.HorizontalAlignment = HorizontalAlignment.Left;
+        Browser.VerticalAlignment = VerticalAlignment.Top;
+        if (!SetWindowPos(
+                window,
+                0,
+                0,
+                0,
+                storeScreenshotWidth,
+                storeScreenshotHeight,
+                noMoveNoZOrderNoActivate))
+        {
+            throw new InvalidOperationException("商城截图要求受控 Windows 桌面为 100% 缩放且窗口可调整到 1600×900");
+        }
+        await Task.Delay(1000);
+        if (Math.Abs(Browser.ActualWidth - storeScreenshotWidth) > 0.5
+            || Math.Abs(Browser.ActualHeight - storeScreenshotHeight) > 0.5)
+        {
+            throw new InvalidOperationException(
+                $"商城截图 WebView2 画布不是 1600×900：{Browser.ActualWidth:0.##}×{Browser.ActualHeight:0.##}");
+        }
+
+        var specifications = new[]
+        {
+            new { View = "home", FileName = "store-listing-home.png", NavigationLabel = (string?)null, Heading = "Nasdaq-100 说明性合成情景", Required = new[] { "确定性合成演示", "非真实行情" } },
+            new { View = "scenarios", FileName = "store-listing-scenarios.png", NavigationLabel = (string?)"情景排名", Heading = "Nasdaq-100 研究排名", Required = new[] { "所有数值均非真实行情", "2026-08-26 快照研究样本" } },
+            new { View = "privacy", FileName = "store-listing-privacy.png", NavigationLabel = (string?)"隐私与数据", Heading = "隐私与本地数据", Required = new[] { "无遥测、无广告标识符", "不读取、不存储" } },
+            new { View = "about", FileName = "store-listing-about.png", NavigationLabel = (string?)"关于", Heading = "关于 Quant Scenario Studio", Required = new[] { "作者与发布者", "License: MIT" } },
+        };
+        List<StoreListingScreenshot> screenshots = [];
+        const string headingProbe = "document.querySelector('.page-heading h1')?.textContent?.trim() || ''";
+        const string privacyProbe = """
+            (() => {
+              const text = document.body?.innerText || '';
+              return JSON.stringify({
+                path: location.pathname,
+                title: document.title || '',
+                text,
+                sensitiveControls: document.querySelectorAll(
+                  'input[type=password],input[type=email],input[type=tel],input[type=file]'
+                ).length,
+                dialogs: document.querySelectorAll('[role=dialog],dialog[open]').length
+              });
+            })()
+            """;
+
+        foreach (var specification in specifications)
+        {
+            if (specification.NavigationLabel is not null)
+            {
+                string labelJson = JsonSerializer.Serialize(specification.NavigationLabel);
+                string navigationScript = "(() => { const label = " + labelJson
+                    + "; const item = [...document.querySelectorAll('.side-nav-item')].find(value => value.textContent?.trim() === label);"
+                    + " if (!item) return false; item.click(); document.querySelector('.main-content')?.scrollTo(0, 0); window.scrollTo(0, 0); return true; })()";
+                string navigationResult = await Browser.CoreWebView2.ExecuteScriptAsync(navigationScript);
+                if (!JsonSerializer.Deserialize<bool>(navigationResult))
+                {
+                    throw new InvalidOperationException($"商城截图无法导航到真实视图：{specification.View}");
+                }
+            }
+            string observedHeading = "";
+            for (int attempt = 0; attempt < 40; attempt++)
+            {
+                string headingResult = await Browser.CoreWebView2.ExecuteScriptAsync(headingProbe);
+                observedHeading = JsonSerializer.Deserialize<string>(headingResult) ?? "";
+                if (observedHeading.Equals(specification.Heading, StringComparison.Ordinal)) { break; }
+                await Task.Delay(100);
+            }
+            if (!observedHeading.Equals(specification.Heading, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"商城截图真实视图标题不匹配：{specification.View}");
+            }
+            await Task.Delay(500);
+
+            string encodedProbe = await Browser.CoreWebView2.ExecuteScriptAsync(privacyProbe);
+            string probeJson = JsonSerializer.Deserialize<string>(encodedProbe)
+                ?? throw new InvalidOperationException("商城截图隐私探针没有返回 JSON");
+            using JsonDocument probeDocument = JsonDocument.Parse(probeJson);
+            JsonElement probe = probeDocument.RootElement;
+            string visibleText = probe.GetProperty("text").GetString() ?? "";
+            if (probe.GetProperty("path").GetString() != "/"
+                || probe.GetProperty("title").GetString() != ProductName
+                || probe.GetProperty("sensitiveControls").GetInt32() != 0
+                || probe.GetProperty("dialogs").GetInt32() != 0
+                || !visibleText.Contains(AuthorCredit, StringComparison.Ordinal)
+                || !visibleText.Contains("不含交易", StringComparison.Ordinal)
+                || specification.Required.Any(token => !visibleText.Contains(token, StringComparison.Ordinal))
+                || visibleText.Contains(_sessionToken, StringComparison.Ordinal)
+                || System.Text.RegularExpressions.Regex.IsMatch(
+                    visibleText,
+                    @"(?i)(?:[a-z]:\\users\\|[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|(?:api[_ -]?key|access[_ -]?token|password|private[_ -]?key)\s*[:=])"))
+            {
+                throw new InvalidOperationException($"商城截图视图不是无账户、无敏感信息的真实确定性页面：{specification.View}");
+            }
+
+            string screenshotPath = Path.Combine(runtime, specification.FileName);
+            if (File.Exists(screenshotPath))
+            {
+                throw new InvalidOperationException("商城截图文件在本轮 QA 前已存在");
+            }
+            await using (FileStream stream = new(
+                screenshotPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                using IRandomAccessStream randomAccessStream = stream.AsRandomAccessStream();
+                await Browser.CoreWebView2.CapturePreviewAsync(
+                    CoreWebView2CapturePreviewImageFormat.Png,
+                    randomAccessStream);
+                await randomAccessStream.FlushAsync();
+            }
+
+            FileInfo screenshotFile = new(screenshotPath);
+            if (screenshotFile.Length < 10_000 || screenshotFile.Length > 20 * 1024 * 1024)
+            {
+                throw new InvalidOperationException("商城截图 PNG 大小不在严格边界内");
+            }
+            byte[] header = new byte[24];
+            await using (FileStream stream = File.OpenRead(screenshotPath))
+            {
+                int read = await stream.ReadAsync(header);
+                if (read != header.Length)
+                {
+                    throw new InvalidOperationException("商城截图 PNG 头被截断");
+                }
+            }
+            byte[] expectedSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+            if (!header.AsSpan(0, 8).SequenceEqual(expectedSignature)
+                || header[12] != (byte)'I' || header[13] != (byte)'H'
+                || header[14] != (byte)'D' || header[15] != (byte)'R')
+            {
+                throw new InvalidOperationException("商城截图不是规范 PNG/IHDR");
+            }
+            int width = (header[16] << 24) | (header[17] << 16) | (header[18] << 8) | header[19];
+            int height = (header[20] << 24) | (header[21] << 16) | (header[22] << 8) | header[23];
+            if (width != storeScreenshotWidth || height != storeScreenshotHeight)
+            {
+                throw new InvalidOperationException($"商城截图 PNG 不是 1600×900：{width}×{height}");
+            }
+            string sha256;
+            await using (FileStream stream = File.OpenRead(screenshotPath))
+            {
+                sha256 = Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
+            }
+            screenshots.Add(new StoreListingScreenshot(
+                specification.FileName,
+                sha256,
+                width,
+                height,
+                specification.View,
+                specification.Heading));
+        }
+        if (screenshots.Count != 4 || screenshots.Select(value => value.View).Distinct(StringComparer.Ordinal).Count() != 4
+            || screenshots.Select(value => value.Sha256).Distinct(StringComparer.Ordinal).Count() != 4)
+        {
+            throw new InvalidOperationException("商城截图必须是四个不同真实视图的四份不同 PNG");
+        }
+        return screenshots;
+    }
+
     private void ShowFailure(string message)
     {
+        WriteQaFailureMarker(message);
         StopBackend();
         Browser.Visibility = Visibility.Collapsed;
         StatusPanel.Visibility = Visibility.Visible;
         Progress.IsActive = false;
         StatusText.Text = message;
+    }
+
+    private void WriteQaFailureMarker(string message)
+    {
+        try
+        {
+            (string dataRoot, _, _) = RuntimeIdentity();
+            string runtime = Path.Combine(dataRoot, "runtime");
+            string expectedPath = Path.Combine(runtime, "qa_expected.json");
+            // This diagnostic exists only for an explicit nonce-bound native QA
+            // launch. Normal Store users never have qa_expected.json.
+            if (!File.Exists(expectedPath))
+            {
+                return;
+            }
+            using JsonDocument expected = JsonDocument.Parse(File.ReadAllText(expectedPath));
+            JsonElement values = expected.RootElement;
+            string packageSha256 = values.GetProperty("packageSha256").GetString() ?? "";
+            string expectedCommit = values.GetProperty("sourceCommit").GetString() ?? "";
+            string qaRound = values.GetProperty("qaRound").GetString() ?? "";
+            string nonce = values.GetProperty("nonce").GetString() ?? "";
+            if (!System.Text.RegularExpressions.Regex.IsMatch(packageSha256, "^[0-9a-f]{64}$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(expectedCommit, "^[0-9a-f]{40}$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(qaRound, "^[12]$")
+                || !System.Text.RegularExpressions.Regex.IsMatch(nonce, "^[0-9a-f]{64}$"))
+            {
+                return;
+            }
+            string safeMessage = _sessionToken is string sessionToken && sessionToken.Length > 0
+                ? message.Replace(sessionToken, "[redacted]", StringComparison.Ordinal)
+                : message;
+            safeMessage = safeMessage.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (safeMessage.Length > 2048)
+            {
+                safeMessage = safeMessage[..2048];
+            }
+            var marker = new
+            {
+                product = ProductName,
+                sourceCommit = SourceCommit(),
+                packageSha256,
+                qaRound,
+                nonce,
+                error = safeMessage,
+                capturedAt = DateTimeOffset.UtcNow.ToString("o"),
+            };
+            string markerPath = Path.Combine(runtime, "ui_failure.json");
+            string temporary = markerPath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(marker));
+            File.Move(temporary, markerPath, overwrite: true);
+        }
+        catch (Exception error)
+        {
+            Debug.WriteLine($"[Aegis QA diagnostic] {error.GetType().Name}: {error.Message}");
+        }
     }
 
     private async Task<Uri> StartBackendAsync()
@@ -412,11 +696,7 @@ public sealed partial class MainWindow : Window
         };
         Browser.CoreWebView2.ProcessFailed += (_, _) =>
         {
-            StopBackend();
-            Browser.Visibility = Visibility.Collapsed;
-            StatusPanel.Visibility = Visibility.Visible;
-            Progress.IsActive = false;
-            StatusText.Text = "WebView2 进程异常退出，请重新启动应用。";
+            ShowFailure("WebView2 进程异常退出，请重新启动应用。");
         };
     }
 

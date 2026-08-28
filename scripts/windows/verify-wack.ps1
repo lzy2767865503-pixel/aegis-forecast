@@ -4,6 +4,11 @@ param(
     [Parameter(Mandatory = $true)][string]$CandidateManifestPath,
     [Parameter(Mandatory = $true)][string]$CertificatePath,
     [Parameter(Mandatory = $true)][string]$ApprovedWackFileVersion,
+    [Parameter(Mandatory = $true)][string]$ApprovedWackSha256,
+    [Parameter(Mandatory = $true)][string]$ApprovedWackSignerSubject,
+    [Parameter(Mandatory = $true)][string]$ApprovedWackSignerThumbprint,
+    [Parameter(Mandatory = $true)][int]$ApprovedWackTestCount,
+    [Parameter(Mandatory = $true)][string]$ApprovedWackTestInventorySha256,
     [Parameter(Mandatory = $true)][ValidateSet("1", "2")][string]$WackRound
 )
 
@@ -12,9 +17,27 @@ $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "wack-runner-policy.ps1")
-$RunnerPolicy = Assert-AegisWackRunner -ApprovedFileVersion $ApprovedWackFileVersion
+$RunnerPolicy = Assert-AegisWackRunner `
+    -ApprovedFileVersion $ApprovedWackFileVersion `
+    -ApprovedSha256 $ApprovedWackSha256 `
+    -ApprovedSignerSubject $ApprovedWackSignerSubject `
+    -ApprovedSignerThumbprint $ApprovedWackSignerThumbprint `
+    -ApprovedTestCount $ApprovedWackTestCount `
+    -ApprovedTestInventorySha256 $ApprovedWackTestInventorySha256
 $CurrentSessionId = [int]$RunnerPolicy.sessionId
 $AppCert = [string]$RunnerPolicy.appCertPath
+
+function Assert-WackRunnerIdentityUnchanged($Current, [string]$Stage) {
+    foreach ($Field in @(
+        'appCertPath', 'fileVersion', 'productVersion', 'appCertSha256',
+        'appCertSignerSubject', 'appCertSignerThumbprint', 'appCertTimestampThumbprint',
+        'approvedTestCount', 'approvedTestInventorySha256', 'sessionId', 'elevatedAdministrator'
+    )) {
+        if ([string]$Current.$Field -cne [string]$RunnerPolicy.$Field) {
+            throw "Protected AppCert runner identity changed at $Stage`: $Field"
+        }
+    }
+}
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
@@ -242,7 +265,7 @@ $PreexistingFamilyRoots = @(
         Where-Object { $_.Name.StartsWith($FamilyPrefix, [StringComparison]::OrdinalIgnoreCase) }
 )
 if ($PreexistingFamilyRoots.Count -ne 0) { throw "Fail-closed: WACK found a preexisting LocalState/PFN root for this identity." }
-$TrustedPeoplePath = "Cert:\CurrentUser\TrustedPeople\$($Certificate.Thumbprint)"
+$TrustedPeoplePath = "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)"
 if (Test-Path -LiteralPath $TrustedPeoplePath) { throw "Fail-closed: the exact WACK certificate was already trusted." }
 $WindowsTempRoot = [IO.Path]::GetFullPath((Join-Path $env:WINDIR "Temp")).TrimEnd("\")
 $PreexistingAppCertRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -283,6 +306,7 @@ $CreatedAppCertRoots = [System.Collections.Generic.HashSet[string]]::new([String
 $OwnedProcesses = @{}
 $WackReportPackageFullName = $null
 $WackReportInstallLocation = $null
+$AppCertLock = $null
 $PrimaryFailure = $null
 
 function Test-TreeHasReparsePoint([string]$Root) {
@@ -508,14 +532,29 @@ function Remove-WackOwnedObjects {
 
 try {
     $CertificateImportAttempted = $true
-    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
     if ($Imported.Thumbprint -ne $Certificate.Thumbprint -or $Imported.Subject -cne $ExpectedTechnicalPublisher) { throw "WACK certificate import mismatch." }
-    $Signature = Get-AuthenticodeSignature -LiteralPath $PackagePath
-    if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint -or $Signature.SignerCertificate.Subject -cne $ExpectedTechnicalPublisher) {
-        throw "WACK package signature does not match the technical Publisher certificate."
-    }
+    $Signature = Assert-AegisValidAppPackageSignature `
+        -Path $PackagePath `
+        -ExpectedCertificateThumbprint $Certificate.Thumbprint `
+        -ExpectedCertificateSubject $ExpectedTechnicalPublisher
     if (-not (Test-Path -LiteralPath $AppCert)) { throw "Windows App Certification Kit appcert.exe was not found." }
     if ((Test-Path $Report) -or (Test-Path $PowerShellTranscript) -or (Test-Path $AppCertLog)) { throw "Stale WACK evidence survived the clean report-root reset." }
+
+    # Hold a read-only, no-write/no-delete sharing lock from the immediate
+    # protected-identity recheck through both AppCert invocations.
+    $AppCertLock = [IO.FileStream]::new($AppCert, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $ExecutionPolicy = Assert-AegisWackRunner `
+        -ApprovedFileVersion $ApprovedWackFileVersion `
+        -ApprovedSha256 $ApprovedWackSha256 `
+        -ApprovedSignerSubject $ApprovedWackSignerSubject `
+        -ApprovedSignerThumbprint $ApprovedWackSignerThumbprint `
+        -ApprovedTestCount $ApprovedWackTestCount `
+        -ApprovedTestInventorySha256 $ApprovedWackTestInventorySha256
+    Assert-WackRunnerIdentityUnchanged -Current $ExecutionPolicy -Stage 'immediately before execution'
+    $LockedHasher = [Security.Cryptography.SHA256]::Create()
+    try { $LockedAppCertSha256 = [Convert]::ToHexString($LockedHasher.ComputeHash($AppCertLock)).ToLowerInvariant() } finally { $LockedHasher.Dispose() }
+    if ($LockedAppCertSha256 -cne $ApprovedWackSha256) { throw 'Locked AppCert bytes differ immediately before execution.' }
 
     Start-Transcript -Path $PowerShellTranscript -Force | Out-Null
     $TranscriptStarted = $true
@@ -523,6 +562,14 @@ try {
     if ($Reset.exitCode -ne 0) { throw "appcert reset returned $($Reset.exitCode)." }
     $Test = Invoke-BoundedAppCert -Label "appcert test" -Arguments @("test", "-appxpackagepath", $PackagePath, "-reportoutputpath", $Report) -TimeoutSeconds 3600 -ConsoleLog $AppCertLog -CapturePackageOwnership
     if ($Test.exitCode -ne 0) { throw "appcert test returned $($Test.exitCode)." }
+    $PostExecutionPolicy = Assert-AegisWackRunner `
+        -ApprovedFileVersion $ApprovedWackFileVersion `
+        -ApprovedSha256 $ApprovedWackSha256 `
+        -ApprovedSignerSubject $ApprovedWackSignerSubject `
+        -ApprovedSignerThumbprint $ApprovedWackSignerThumbprint `
+        -ApprovedTestCount $ApprovedWackTestCount `
+        -ApprovedTestInventorySha256 $ApprovedWackTestInventorySha256
+    Assert-WackRunnerIdentityUnchanged -Current $PostExecutionPolicy -Stage 'after execution'
     Stop-Transcript | Out-Null
     $TranscriptStarted = $false
     $RunFinishedAt = [DateTimeOffset]::UtcNow
@@ -535,7 +582,11 @@ try {
         if ($Written -lt $RunStartedAt.AddSeconds(-2) -or $Written -gt $RunFinishedAt.AddMinutes(1)) { throw "WACK evidence is stale or has an impossible timestamp: $FreshFile" }
     }
 
-    $ResultValues = @(Read-AegisCompleteWackReport $Report)
+    $ParsedReport = Read-AegisCompleteWackReport -Path $Report -ApprovedVersion $ApprovedWackFileVersion
+    if ([int]$ParsedReport.testCount -ne $ApprovedWackTestCount -or
+        [string]$ParsedReport.testInventorySha256 -cne $ApprovedWackTestInventorySha256) {
+        throw "WACK complete TEST count/inventory differs from the exact protected approval."
+    }
     Capture-WackReportOwnedLocation
 
     # AppCert may intentionally leave its package or app process behind. Clean
@@ -565,7 +616,7 @@ try {
 
     $PackageHashAfter = Assert-CandidateBytes "completion"
     [ordered]@{
-        schemaVersion = 3
+        schemaVersion = 5
         wackRound = $WackRound
         product = $Candidate.product
         author = $Candidate.author
@@ -587,12 +638,27 @@ try {
         reportSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Report).Hash.ToLowerInvariant()
         powershellTranscriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PowerShellTranscript).Hash.ToLowerInvariant()
         appcertConsoleSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $AppCertLog).Hash.ToLowerInvariant()
-        resultCount = $ResultValues.Count
-        overallResults = @($ResultValues)
+        resultCount = @($ParsedReport.overallResults).Count
+        overallResults = @($ParsedReport.overallResults)
+        testCount = [int]$ParsedReport.testCount
+        testInventorySha256 = [string]$ParsedReport.testInventorySha256
+        reportLatestVersion = [bool]$ParsedReport.latestVersion
+        reportVersion = [string]$ParsedReport.reportVersion
         hardTimeoutEnforced = $true
         interactiveSessionId = $CurrentSessionId
         elevatedAdministrator = [bool]$RunnerPolicy.elevatedAdministrator
+        approvedWackFileVersion = $ApprovedWackFileVersion
+        approvedWackSha256 = $ApprovedWackSha256
+        approvedWackSignerSubject = $ApprovedWackSignerSubject
+        approvedWackSignerThumbprint = $ApprovedWackSignerThumbprint
+        approvedWackTestCount = $ApprovedWackTestCount
+        approvedWackTestInventorySha256 = $ApprovedWackTestInventorySha256
         wackFileVersion = [string]$RunnerPolicy.fileVersion
+        appcertProductVersion = [string]$RunnerPolicy.productVersion
+        appcertSha256 = [string]$RunnerPolicy.appCertSha256
+        appcertSignerSubject = [string]$RunnerPolicy.appCertSignerSubject
+        appcertSignerThumbprint = [string]$RunnerPolicy.appCertSignerThumbprint
+        appcertTimestampThumbprint = [string]$RunnerPolicy.appCertTimestampThumbprint
         noRuntimeResidue = $true
         capturedAt = [DateTimeOffset]::UtcNow.ToString("o")
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $ReportRoot "wack-summary.json")
@@ -604,10 +670,13 @@ try {
     if ($TranscriptStarted) {
         try { Stop-Transcript | Out-Null } catch { $FinalErrors.Add("transcript: $($_.Exception.Message)") }
     }
+    if ($AppCertLock) {
+        try { $AppCertLock.Dispose() } catch { $FinalErrors.Add("AppCert lock: $($_.Exception.Message)") }
+    }
     Remove-WackOwnedObjects -Errors $FinalErrors
     if ($CertificateImportAttempted) {
         try {
-            & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("CurrentUser\TrustedPeople")
+            & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("LocalMachine\TrustedPeople")
         } catch { $FinalErrors.Add("certificate: $($_.Exception.Message)") }
     }
     if ($FinalErrors.Count -ne 0) { throw "WACK verification/cleanup failures: $($FinalErrors -join ' | ')" }

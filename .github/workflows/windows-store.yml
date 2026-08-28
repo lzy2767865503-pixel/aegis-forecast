@@ -12,6 +12,11 @@ env:
   AEGIS_EXPECTED_STORE_IDENTITY_NAME: LAIZEYU.QuantScenarioStudiobyLAIZEYU
   AEGIS_STORE_PUBLISHER: CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8
   AEGIS_APPROVED_WACK_FILE_VERSION: ${{ vars.AEGIS_APPROVED_WACK_FILE_VERSION }}
+  AEGIS_APPROVED_WACK_SHA256: ${{ vars.AEGIS_APPROVED_WACK_SHA256 }}
+  AEGIS_APPROVED_WACK_SIGNER_SUBJECT: ${{ vars.AEGIS_APPROVED_WACK_SIGNER_SUBJECT }}
+  AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT: ${{ vars.AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT }}
+  AEGIS_APPROVED_WACK_TEST_COUNT: ${{ vars.AEGIS_APPROVED_WACK_TEST_COUNT }}
+  AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256: ${{ vars.AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256 }}
   AEGIS_MAIN_RULESET_ID: "21633557"
   AEGIS_PRIVATE_STORE_HANDOFF_ROOT: ${{ vars.AEGIS_PRIVATE_STORE_HANDOFF_ROOT }}
 
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   build-and-verify-one-candidate:
-    name: Build once, QA twice, WACK twice, retain unsigned handoff privately
+    name: Build once, QA twice, WACK twice, retain unsigned privately, export four exact screenshots
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
@@ -72,10 +77,12 @@ jobs:
           $Excludes = @($Ruleset.conditions.ref_name.exclude)
           $RuleTypes = @($Ruleset.rules | ForEach-Object type | Sort-Object)
           $PullRequestRules = @($Ruleset.rules | Where-Object type -ceq 'pull_request')
+          $StatusCheckRules = @($Ruleset.rules | Where-Object type -ceq 'required_status_checks')
           if ($LASTEXITCODE -ne 0 -or [long]$Ruleset.id -ne 21633557 -or $Ruleset.enforcement -cne 'active' -or
               $Ruleset.target -cne 'branch' -or @($Ruleset.bypass_actors).Count -ne 0 -or
               ($Includes -join '|') -cne 'refs/heads/main' -or $Excludes.Count -ne 0 -or
-              ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or $PullRequestRules.Count -ne 1) {
+              ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks' -or
+              $PullRequestRules.Count -ne 1 -or $StatusCheckRules.Count -ne 1) {
             throw 'The active no-bypass main lineage ruleset is not exact.'
           }
           $Parameters = $PullRequestRules[0].parameters
@@ -93,8 +100,27 @@ jobs:
               @($Parameters.required_reviewers).Count -ne 0) {
             throw 'The exact main pull-request/review-thread-resolution policy drifted.'
           }
+          $StatusParameters = $StatusCheckRules[0].parameters
+          $StatusParameterKeys = @($StatusParameters.PSObject.Properties.Name | Sort-Object)
+          $ExpectedStatusParameterKeys = @('do_not_enforce_on_create', 'required_status_checks', 'strict_required_status_checks_policy') | Sort-Object
+          $Checks = @($StatusParameters.required_status_checks)
+          $CheckContexts = @($Checks | ForEach-Object { [string]$_.context } | Sort-Object)
+          $ExpectedContexts = @('verify (3.10)', 'verify (3.12)') | Sort-Object
+          if (($StatusParameterKeys -join '|') -cne ($ExpectedStatusParameterKeys -join '|') -or
+              -not $StatusParameters.strict_required_status_checks_policy -or $StatusParameters.do_not_enforce_on_create -or
+              $Checks.Count -ne 2 -or ($CheckContexts -join '|') -cne ($ExpectedContexts -join '|') -or
+              @($Checks | Where-Object { [long]$_.integration_id -ne 15368 }).Count -ne 0 -or
+              @($Checks | Where-Object { (@($_.PSObject.Properties.Name | Sort-Object) -join '|') -cne 'context|integration_id' }).Count -ne 0) {
+            throw 'The exact strict GitHub Actions required-status-check policy drifted.'
+          }
           . ./scripts/windows/wack-runner-policy.ps1
-          [void](Assert-AegisWackRunner -ApprovedFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION)
+          [void](Assert-AegisWackRunner `
+            -ApprovedFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION `
+            -ApprovedSha256 $env:AEGIS_APPROVED_WACK_SHA256 `
+            -ApprovedSignerSubject $env:AEGIS_APPROVED_WACK_SIGNER_SUBJECT `
+            -ApprovedSignerThumbprint $env:AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT `
+            -ApprovedTestCount ([int]$env:AEGIS_APPROVED_WACK_TEST_COUNT) `
+            -ApprovedTestInventorySha256 $env:AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256)
 
       - name: Fail early unless the local fixed-NTFS handoff root has the exact private ACL
         shell: pwsh
@@ -129,34 +155,100 @@ jobs:
 
       - name: Create an ephemeral Partner Center technical development certificate
         id: cert
+        timeout-minutes: 3
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
           Set-StrictMode -Version Latest
           $PasswordText = "Aegis-CI-Only-Not-For-Distribution"
           $Password = ConvertTo-SecureString $PasswordText -AsPlainText -Force
           $Subject = $env:AEGIS_STORE_PUBLISHER
           $Stem = "aegis-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $FriendlyName = "Aegis-CI-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $Certificate = New-SelfSignedCertificate -Type Custom -Subject $Subject -FriendlyName $FriendlyName -KeyUsage DigitalSignature -KeyExportPolicy Exportable -KeySpec Signature -HashAlgorithm SHA256 -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-          if ($Certificate.Thumbprint -notmatch "^[0-9A-F]{40}$" -or $Certificate.Subject -ne $Subject) { throw "Ephemeral certificate identity is invalid." }
+          function Get-CngKeyInventory {
+            $Root = Join-Path $env:APPDATA 'Microsoft\Crypto\Keys'
+            if (-not (Test-Path -LiteralPath $Root)) { return @() }
+            $RootItem = Get-Item -LiteralPath $Root -Force
+            $Entries = @(Get-ChildItem -LiteralPath $Root -File -Force -Recurse)
+            if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Current-user CNG key inventory contains a reparse point.'
+            }
+            return @($Entries | Sort-Object FullName | ForEach-Object {
+              [ordered]@{
+                name = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
+                size = [long]$_.Length
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+              }
+            })
+          }
           $Pfx = Join-Path $env:RUNNER_TEMP "$Stem.pfx"
           $Cer = Join-Path $env:RUNNER_TEMP "$Stem.cer"
           $Owner = Join-Path $env:RUNNER_TEMP "$Stem.certificate-owner.json"
           if (Test-Path -LiteralPath $Owner) { throw "Certificate ownership marker must not preexist." }
-          [ordered]@{
-            schemaVersion = 1
+          $PreexistingCngKeyFiles = @(Get-CngKeyInventory)
+          $OwnerEvidence = [ordered]@{
+            schemaVersion = 2
+            phase = 'PRECREATE_BASELINE_RECORDED'
             githubRunId = $env:GITHUB_RUN_ID
             githubRunAttempt = $env:GITHUB_RUN_ATTEMPT
             subject = $Subject
-            thumbprint = $Certificate.Thumbprint
-          } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 -LiteralPath $Owner
+            friendlyName = $FriendlyName
+            thumbprint = ''
+            keyName = ''
+            keyUniqueName = ''
+            keyProvider = ''
+            preexistingCngKeyFiles = $PreexistingCngKeyFiles
+            postCleanupCngKeyFiles = @()
+            deleteKeyAttempted = $false
+            deleteKeySucceeded = $false
+          }
+          [IO.File]::WriteAllText($Owner, (($OwnerEvidence | ConvertTo-Json -Depth 6 -Compress) + "`n"), [Text.UTF8Encoding]::new($false))
+          $Certificate = New-SelfSignedCertificate -Type Custom -Subject $Subject -FriendlyName $FriendlyName -KeyUsage DigitalSignature -KeyExportPolicy Exportable -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyProtection None -HashAlgorithm SHA256 -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+          if ($Certificate.Thumbprint -notmatch "^[0-9A-F]{40}$" -or $Certificate.Subject -ne $Subject) { throw "Ephemeral certificate identity is invalid." }
+          $PrivateKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($Certificate)
+          try {
+            if ($PrivateKey -isnot [Security.Cryptography.RSACng] -or $PrivateKey.Key.IsMachineKey -or
+                $PrivateKey.Key.Provider.Provider -cne 'Microsoft Software Key Storage Provider' -or
+                [string]::IsNullOrWhiteSpace($PrivateKey.Key.KeyName) -or
+                [IO.Path]::GetFileName($PrivateKey.Key.UniqueName) -cne $PrivateKey.Key.UniqueName) {
+              throw 'Ephemeral development certificate did not create one exact current-user software CNG key.'
+            }
+            $KeyName = [string]$PrivateKey.Key.KeyName
+            $KeyUniqueName = [string]$PrivateKey.Key.UniqueName
+            $KeyProvider = [string]$PrivateKey.Key.Provider.Provider
+          } finally { if ($PrivateKey) { $PrivateKey.Dispose() } }
+          $PostCreateCngKeyFiles = @(Get-CngKeyInventory)
+          $PreNames = @($PreexistingCngKeyFiles | ForEach-Object { [string]$_.name })
+          $Added = @($PostCreateCngKeyFiles | Where-Object { [string]$_.name -cnotin $PreNames })
+          if ($Added.Count -ne 1 -or [string]$Added[0].name -cne $KeyUniqueName) {
+            throw 'Ephemeral certificate CNG key inventory did not add exactly its bound key container.'
+          }
+          $OwnerEvidence.phase = 'CERTIFICATE_AND_KEY_CREATED'
+          $OwnerEvidence.thumbprint = $Certificate.Thumbprint
+          $OwnerEvidence.keyName = $KeyName
+          $OwnerEvidence.keyUniqueName = $KeyUniqueName
+          $OwnerEvidence.keyProvider = $KeyProvider
+          [IO.File]::WriteAllText($Owner, (($OwnerEvidence | ConvertTo-Json -Depth 6 -Compress) + "`n"), [Text.UTF8Encoding]::new($false))
           "pfx=$Pfx" >> $env:GITHUB_OUTPUT
           "cer=$Cer" >> $env:GITHUB_OUTPUT
           "thumbprint=$($Certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
           Export-PfxCertificate -Cert $Certificate -FilePath $Pfx -Password $Password | Out-Null
           Export-Certificate -Cert $Certificate -FilePath $Cer | Out-Null
-          Import-Certificate -FilePath $Cer -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+          $PublicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Cer)
+          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'LocalMachine')
+          try {
+            $TrustedPeople.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $TrustedPeople.Add($PublicCertificate)
+          } finally {
+            $TrustedPeople.Dispose()
+            $PublicCertificate.Dispose()
+          }
+          $ImportedTrust = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)" -ErrorAction Stop
+          if ($ImportedTrust.Subject -cne $Subject -or $ImportedTrust.HasPrivateKey) {
+            throw 'Imported build-only public trust differs from its certificate.'
+          }
 
       - name: Build the only technical-identity development candidate
         shell: pwsh
@@ -168,6 +260,16 @@ jobs:
           -StoreIdentityName $env:AEGIS_STORE_IDENTITY_NAME
           -StorePublisher $env:AEGIS_STORE_PUBLISHER
 
+      - name: Remove build-only trust before independent native QA
+        shell: pwsh
+        run: |
+          ./scripts/windows/remove-development-certificate.ps1 `
+            -Thumbprint '${{ steps.cert.outputs.thumbprint }}' `
+            -StoreLocations @('LocalMachine\TrustedPeople')
+          if (Test-Path -LiteralPath 'Cert:\LocalMachine\TrustedPeople\${{ steps.cert.outputs.thumbprint }}') {
+            throw 'Build-only trust remained before native QA.'
+          }
+
       - name: Native QA round 1 on the original candidate bytes
         shell: pwsh
         run: ./scripts/windows/verify-native.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -QaRound 1
@@ -176,14 +278,40 @@ jobs:
         run: ./scripts/windows/verify-native.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -QaRound 2
       - name: Strict WACK round 1 on those same QA bytes
         shell: pwsh
-        run: ./scripts/windows/verify-wack.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -ApprovedWackFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION -WackRound 1
+        run: >-
+          ./scripts/windows/verify-wack.ps1
+          -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix
+          -CandidateManifestPath artifacts/candidate/candidate.json
+          -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer
+          -ApprovedWackFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION
+          -ApprovedWackSha256 $env:AEGIS_APPROVED_WACK_SHA256
+          -ApprovedWackSignerSubject $env:AEGIS_APPROVED_WACK_SIGNER_SUBJECT
+          -ApprovedWackSignerThumbprint $env:AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT
+          -ApprovedWackTestCount ([int]$env:AEGIS_APPROVED_WACK_TEST_COUNT)
+          -ApprovedWackTestInventorySha256 $env:AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256
+          -WackRound 1
       - name: Strict WACK round 2 on those same QA bytes
         shell: pwsh
-        run: ./scripts/windows/verify-wack.ps1 -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix -CandidateManifestPath artifacts/candidate/candidate.json -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer -ApprovedWackFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION -WackRound 2
+        run: >-
+          ./scripts/windows/verify-wack.ps1
+          -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix
+          -CandidateManifestPath artifacts/candidate/candidate.json
+          -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer
+          -ApprovedWackFileVersion $env:AEGIS_APPROVED_WACK_FILE_VERSION
+          -ApprovedWackSha256 $env:AEGIS_APPROVED_WACK_SHA256
+          -ApprovedWackSignerSubject $env:AEGIS_APPROVED_WACK_SIGNER_SUBJECT
+          -ApprovedWackSignerThumbprint $env:AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT
+          -ApprovedWackTestCount ([int]$env:AEGIS_APPROVED_WACK_TEST_COUNT)
+          -ApprovedWackTestInventorySha256 $env:AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256
+          -WackRound 2
 
       - name: Validate evidence schemas and write a fixed job summary
         shell: pwsh
         run: ./scripts/windows/generate-release-metadata.ps1
+
+      - name: Prepare only four privacy-validated exact-candidate Store screenshots
+        shell: pwsh
+        run: ./scripts/windows/prepare-store-listing-screenshot.ps1
 
       - name: Prepare the unsigned Partner Center handoff from the verified lineage
         shell: pwsh
@@ -203,25 +331,93 @@ jobs:
           $Stem = "aegis-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $FriendlyName = "Aegis-CI-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $OwnerPath = Join-Path $env:RUNNER_TEMP "$Stem.certificate-owner.json"
+          function Get-CngKeyInventory {
+            $Root = Join-Path $env:APPDATA 'Microsoft\Crypto\Keys'
+            if (-not (Test-Path -LiteralPath $Root)) { return @() }
+            $RootItem = Get-Item -LiteralPath $Root -Force
+            $Entries = @(Get-ChildItem -LiteralPath $Root -File -Force -Recurse)
+            if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Current-user CNG key inventory contains a reparse point during cleanup.'
+            }
+            return @($Entries | Sort-Object FullName | ForEach-Object {
+              [ordered]@{
+                name = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
+                size = [long]$_.Length
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+              }
+            })
+          }
           if (Test-Path -LiteralPath $OwnerPath) {
             $Owner = Get-Content -Raw -LiteralPath $OwnerPath | ConvertFrom-Json
             $Keys = @($Owner.PSObject.Properties.Name | Sort-Object)
-            if (($Keys -join '|') -cne 'githubRunAttempt|githubRunId|schemaVersion|subject|thumbprint' -or
-                $Owner.schemaVersion -ne 1 -or $Owner.githubRunId -cne $env:GITHUB_RUN_ID -or
+            if (($Keys -join '|') -cne 'deleteKeyAttempted|deleteKeySucceeded|friendlyName|githubRunAttempt|githubRunId|keyName|keyProvider|keyUniqueName|phase|postCleanupCngKeyFiles|preexistingCngKeyFiles|schemaVersion|subject|thumbprint' -or
+                $Owner.schemaVersion -ne 2 -or $Owner.githubRunId -cne $env:GITHUB_RUN_ID -or
                 $Owner.githubRunAttempt -cne $env:GITHUB_RUN_ATTEMPT -or
-                $Owner.subject -cne $env:AEGIS_STORE_PUBLISHER -or $Owner.thumbprint -cnotmatch '^[0-9A-F]{40}$') {
+                $Owner.subject -cne $env:AEGIS_STORE_PUBLISHER -or $Owner.friendlyName -cne $FriendlyName -or
+                $Owner.phase -cnotin @('PRECREATE_BASELINE_RECORDED', 'CERTIFICATE_AND_KEY_CREATED')) {
               throw "Certificate ownership marker is invalid."
             }
-            if ($Thumbprint -and $Thumbprint -cne $Owner.thumbprint) { throw "Certificate output and ownership marker disagree." }
-            $Thumbprint = $Owner.thumbprint
-          }
-          if (-not $Thumbprint) {
             $OwnedCandidates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.FriendlyName -ceq $FriendlyName -and $_.Subject -ceq $env:AEGIS_STORE_PUBLISHER })
             if ($OwnedCandidates.Count -gt 1) { throw "More than one exact run-owned development certificate exists." }
-            if ($OwnedCandidates.Count -eq 1) { $Thumbprint = $OwnedCandidates[0].Thumbprint }
-          }
-          if ($Thumbprint) {
-            ./scripts/windows/remove-development-certificate.ps1 -Thumbprint $Thumbprint -StoreLocations @("CurrentUser\My", "CurrentUser\Root", "CurrentUser\TrustedPeople")
+            if ($OwnedCandidates.Count -eq 1) {
+              $OwnedCertificate = $OwnedCandidates[0]
+              $PrivateKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($OwnedCertificate)
+              try {
+                if ($PrivateKey -isnot [Security.Cryptography.RSACng] -or $PrivateKey.Key.IsMachineKey -or
+                    $PrivateKey.Key.Provider.Provider -cne 'Microsoft Software Key Storage Provider') {
+                  throw 'Run-owned development certificate key is not the expected user software CNG key.'
+                }
+                $ObservedKeyName = [string]$PrivateKey.Key.KeyName
+                $ObservedKeyUniqueName = [string]$PrivateKey.Key.UniqueName
+                $ObservedKeyProvider = [string]$PrivateKey.Key.Provider.Provider
+              } finally { if ($PrivateKey) { $PrivateKey.Dispose() } }
+              if ($Owner.phase -ceq 'CERTIFICATE_AND_KEY_CREATED' -and
+                  ($Owner.thumbprint -cne $OwnedCertificate.Thumbprint -or $Owner.keyName -cne $ObservedKeyName -or
+                   $Owner.keyUniqueName -cne $ObservedKeyUniqueName -or $Owner.keyProvider -cne $ObservedKeyProvider)) {
+                throw 'Certificate/key ownership marker differs from the exact current-user CNG container.'
+              }
+              $Thumbprint = $OwnedCertificate.Thumbprint
+              $Owner.thumbprint = $Thumbprint
+              $Owner.keyName = $ObservedKeyName
+              $Owner.keyUniqueName = $ObservedKeyUniqueName
+              $Owner.keyProvider = $ObservedKeyProvider
+            } elseif ($Owner.phase -ceq 'CERTIFICATE_AND_KEY_CREATED') {
+              throw 'Created development certificate disappeared before exact key deletion.'
+            }
+            if ($Thumbprint -and $Owner.thumbprint -and $Thumbprint -cne $Owner.thumbprint) { throw "Certificate output and ownership marker disagree." }
+            if ($Owner.thumbprint) {
+              $Owner.deleteKeyAttempted = $true
+              ./scripts/windows/remove-development-certificate.ps1 `
+                -Thumbprint $Owner.thumbprint `
+                -StoreLocations @("CurrentUser\My", "CurrentUser\Root", "CurrentUser\TrustedPeople", "LocalMachine\TrustedPeople") `
+                -DeletePrivateKey `
+                -ExpectedCngKeyName $Owner.keyName `
+                -ExpectedCngKeyUniqueName $Owner.keyUniqueName `
+                -ExpectedCngProvider $Owner.keyProvider
+              $Owner.deleteKeySucceeded = $true
+            }
+            $PostCleanupCngKeyFiles = @(Get-CngKeyInventory)
+            if (($PostCleanupCngKeyFiles | ConvertTo-Json -Depth 5 -Compress) -cne
+                (@($Owner.preexistingCngKeyFiles) | ConvertTo-Json -Depth 5 -Compress)) {
+              throw 'Current-user CNG key container inventory did not return to its exact pre-certificate baseline.'
+            }
+            if ($Owner.phase -ceq 'CERTIFICATE_AND_KEY_CREATED' -and (-not $Owner.deleteKeyAttempted -or -not $Owner.deleteKeySucceeded)) {
+              throw 'Created development certificate did not complete exact Remove-Item -DeleteKey cleanup.'
+            }
+            if ($Owner.thumbprint) {
+              foreach ($Store in @('My', 'Root', 'TrustedPeople')) {
+                if (Test-Path -LiteralPath "Cert:\CurrentUser\$Store\$($Owner.thumbprint)") { throw "Exact development certificate remains in CurrentUser $Store." }
+              }
+              if (Test-Path -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($Owner.thumbprint)") {
+                throw 'Exact development certificate remains in LocalMachine TrustedPeople.'
+              }
+            }
+            $Owner.phase = 'CLEANUP_AND_CNG_BASELINE_VERIFIED'
+            $Owner.postCleanupCngKeyFiles = $PostCleanupCngKeyFiles
+            [IO.File]::WriteAllText($OwnerPath, (($Owner | ConvertTo-Json -Depth 6 -Compress) + "`n"), [Text.UTF8Encoding]::new($false))
+          } elseif ($Thumbprint) {
+            throw 'Certificate thumbprint exists without the pre-create CNG baseline marker.'
           }
 
       - name: Remove only this run's certificate files and private work products
@@ -269,3 +465,42 @@ jobs:
             } catch { $Errors.Add("$Relative`: $($_.Exception.Message)") }
           }
           if ($Errors.Count -ne 0) { throw "Store work-product cleanup failures: $($Errors -join ' | ')" }
+
+      - name: Revalidate the exact four screenshot hashes after all private cleanup
+        shell: pwsh
+        run: ./scripts/windows/prepare-store-listing-screenshot.ps1 -ValidatePublicOnly
+
+      - name: Upload only four exact-candidate Store listing PNGs after private cleanup
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-store-listing-screenshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-01-Home.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-02-Scenarios.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-03-Privacy.png
+            artifacts/store-listing-public/Quant-Scenario-Studio-Store-04-About.png
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Remove the exact public screenshot staging after upload
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Artifacts = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts')).TrimEnd('\') + '\'
+          $Target = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts\store-listing-public'))
+          if (-not $Target.StartsWith($Artifacts, [StringComparison]::OrdinalIgnoreCase) -or
+              [IO.Path]::GetFileName($Target) -cne 'store-listing-public') {
+            throw 'Public screenshot cleanup escaped the exact artifacts child.'
+          }
+          if (Test-Path -LiteralPath $Target) {
+            $Entries = @((Get-Item -LiteralPath $Target -Force); Get-ChildItem -LiteralPath $Target -Force -Recurse)
+            if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Public screenshot cleanup tree contains a reparse point.'
+            }
+            Remove-Item -LiteralPath $Target -Recurse -Force
+          }
+          if (Test-Path -LiteralPath $Target) { throw 'Public screenshot staging remained after upload.' }

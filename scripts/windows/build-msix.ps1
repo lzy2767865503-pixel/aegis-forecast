@@ -107,14 +107,13 @@ if ($UnsignedSignature.Status -ne [Management.Automation.SignatureStatus]::NotSi
 $Signtool = Get-AegisTrustedWindowsSdkTool -Name "signtool.exe"
 & $Signtool sign /fd SHA256 /f $Pfx /p $CertificatePassword $CandidateMsix | Out-Host
 Assert-NativeSuccess "temporary QA MSIX signing"
-$Signature = Get-AuthenticodeSignature -LiteralPath $CandidateMsix
-if ($Signature.Status -ne "Valid") { throw "Signed-development MSIX signature is not valid: $($Signature.Status)" }
 $PublicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CandidateCer)
 if ($PublicCertificate.Thumbprint -notmatch "^[0-9A-F]{40}$") { throw "Public CER thumbprint is invalid." }
 if ($PublicCertificate.Subject -cne $ExpectedTechnicalPublisher) { throw "Development certificate must match the Partner Center technical Publisher." }
-if ($Signature.SignerCertificate.Thumbprint -ne $PublicCertificate.Thumbprint) {
-    throw "MSIX signer does not match the published CER."
-}
+$Signature = Assert-AegisValidAppPackageSignature `
+    -Path $CandidateMsix `
+    -ExpectedCertificateThumbprint $PublicCertificate.Thumbprint `
+    -ExpectedCertificateSubject $ExpectedTechnicalPublisher
 $Equivalence = & scripts\windows\msix-payload-equivalence.ps1 `
     -SubmissionMsixPath $SubmissionMsix `
     -QaMsixPath $CandidateMsix `

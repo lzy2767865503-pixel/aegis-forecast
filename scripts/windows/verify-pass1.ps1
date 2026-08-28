@@ -23,12 +23,19 @@ $PreviousSession = $env:AEGIS_SESSION_TOKEN
 $PreviousCsrf = $env:AEGIS_CSRF_TOKEN
 $PreviousData = $env:AEGIS_DATA_ROOT
 $PreviousBinding = $env:AEGIS_DATA_ROOT_BINDING
+$PreviousPythonUtf8 = $env:PYTHONUTF8
+$PreviousPythonIoEncoding = $env:PYTHONIOENCODING
 $Backend = $null
 $BackendOwnership = $null
 $TempRoots = @($TestData, $BoundaryData)
 $PrimaryFailure = $null
 
 try {
+    # Windows hosted and self-hosted runners may inherit a legacy CP1252
+    # console. Keep the bilingual author identity and every Python log in
+    # canonical UTF-8 for this bounded verification process only.
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
     $env:AEGIS_DATA_ROOT = $TestData
     $env:AEGIS_DATA_ROOT_BINDING = "TEST:windows-pass1-$RunId"
 
@@ -165,7 +172,9 @@ try {
         [pscustomobject]@{ name = "AEGIS_SESSION_TOKEN"; value = $PreviousSession },
         [pscustomobject]@{ name = "AEGIS_CSRF_TOKEN"; value = $PreviousCsrf },
         [pscustomobject]@{ name = "AEGIS_DATA_ROOT"; value = $PreviousData },
-        [pscustomobject]@{ name = "AEGIS_DATA_ROOT_BINDING"; value = $PreviousBinding }
+        [pscustomobject]@{ name = "AEGIS_DATA_ROOT_BINDING"; value = $PreviousBinding },
+        [pscustomobject]@{ name = "PYTHONUTF8"; value = $PreviousPythonUtf8 },
+        [pscustomobject]@{ name = "PYTHONIOENCODING"; value = $PreviousPythonIoEncoding }
     )) {
         try {
             if ($Restore.value) { [Environment]::SetEnvironmentVariable($Restore.name, [string]$Restore.value, "Process") }

@@ -1,0 +1,256 @@
+name: Hosted Windows candidate QA
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegis-hosted-windows-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-once-test-twice:
+    name: Build one MSIX and run two native lifecycle passes
+    if: >-
+      github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login == 'lzy2767865503-pixel') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'lzy2767865503-pixel' &&
+        github.triggering_actor == 'lzy2767865503-pixel'))
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      AEGIS_STORE_IDENTITY_NAME: LAIZEYU.QuantScenarioStudiobyLAIZEYU
+      AEGIS_STORE_PUBLISHER: CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8
+      AEGIS_HOSTED_CERT_PASSWORD: Aegis-Hosted-CI-Only-Not-For-Distribution
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: 3.13.14
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock.txt
+            requirements-windows-build.lock.txt
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.424
+
+      - name: Install the pinned Windows toolchain
+        shell: pwsh
+        run: ./scripts/windows/setup.ps1
+      - name: Run source, dependency, frozen-sidecar and core scenario gates
+        shell: pwsh
+        run: ./scripts/windows/verify-pass1.ps1
+
+      - name: Create one ephemeral technical-Publisher development certificate
+        id: cert
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Set-StrictMode -Version Latest
+          $Password = ConvertTo-SecureString $env:AEGIS_HOSTED_CERT_PASSWORD -AsPlainText -Force
+          $Stem = "aegis-hosted-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $Pfx = Join-Path $env:RUNNER_TEMP "$Stem.pfx"
+          $Cer = Join-Path $env:RUNNER_TEMP "$Stem.cer"
+          foreach ($Path in @($Pfx, $Cer)) {
+            if (Test-Path -LiteralPath $Path) { throw 'Hosted development-certificate path must not preexist.' }
+          }
+          $Certificate = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $env:AEGIS_STORE_PUBLISHER `
+            -FriendlyName $Stem `
+            -KeyUsage DigitalSignature `
+            -KeyExportPolicy Exportable `
+            -Provider 'Microsoft Software Key Storage Provider' `
+            -KeyAlgorithm RSA `
+            -KeyLength 2048 `
+            -KeyProtection None `
+            -HashAlgorithm SHA256 `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+          if ($Certificate.Subject -cne $env:AEGIS_STORE_PUBLISHER -or $Certificate.Thumbprint -cnotmatch '^[0-9A-F]{40}$') {
+            throw 'Hosted development certificate identity is invalid.'
+          }
+          Write-Host 'Hosted development certificate generated.'
+          $PrivateKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($Certificate)
+          try {
+            if ($PrivateKey -isnot [Security.Cryptography.RSACng] -or $PrivateKey.Key.IsMachineKey -or
+                $PrivateKey.Key.Provider.Provider -cne 'Microsoft Software Key Storage Provider' -or
+                [string]::IsNullOrWhiteSpace($PrivateKey.Key.KeyName) -or
+                [IO.Path]::GetFileName($PrivateKey.Key.UniqueName) -cne $PrivateKey.Key.UniqueName) {
+              throw 'Hosted development certificate did not use one exact current-user software CNG key.'
+            }
+            $KeyName = [string]$PrivateKey.Key.KeyName
+            $KeyUniqueName = [string]$PrivateKey.Key.UniqueName
+            $KeyProvider = [string]$PrivateKey.Key.Provider.Provider
+          } finally {
+            if ($PrivateKey) { $PrivateKey.Dispose() }
+          }
+          Write-Host 'Hosted development certificate CNG key validated.'
+          Export-PfxCertificate -Cert $Certificate -FilePath $Pfx -Password $Password | Out-Null
+          Export-Certificate -Cert $Certificate -FilePath $Cer | Out-Null
+          Write-Host 'Hosted development certificate exported.'
+          $PublicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Cer)
+          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'LocalMachine')
+          try {
+            $TrustedPeople.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $TrustedPeople.Add($PublicCertificate)
+          } finally {
+            $TrustedPeople.Dispose()
+            $PublicCertificate.Dispose()
+          }
+          $ImportedTrust = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)" -ErrorAction Stop
+          if ($ImportedTrust.Thumbprint -cne $Certificate.Thumbprint -or $ImportedTrust.HasPrivateKey) {
+            throw 'Hosted build-only public trust differs from the development certificate.'
+          }
+          Write-Host 'Hosted build-only TrustedPeople certificate validated.'
+          "pfx=$Pfx" >> $env:GITHUB_OUTPUT
+          "cer=$Cer" >> $env:GITHUB_OUTPUT
+          "thumbprint=$($Certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+          "key_name=$KeyName" >> $env:GITHUB_OUTPUT
+          "key_unique_name=$KeyUniqueName" >> $env:GITHUB_OUTPUT
+          "key_provider=$KeyProvider" >> $env:GITHUB_OUTPUT
+
+      - name: Build the one unsigned Store MSIX and its payload-equivalent signed QA copy
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build-msix.ps1
+          -CertificatePath '${{ steps.cert.outputs.pfx }}'
+          -CertificatePassword $env:AEGIS_HOSTED_CERT_PASSWORD
+          -CertificatePublicPath '${{ steps.cert.outputs.cer }}'
+          -StoreIdentityName $env:AEGIS_STORE_IDENTITY_NAME
+          -StorePublisher $env:AEGIS_STORE_PUBLISHER
+      - name: Remove build-only trust before independent native QA
+        shell: pwsh
+        run: |
+          ./scripts/windows/remove-development-certificate.ps1 `
+            -Thumbprint '${{ steps.cert.outputs.thumbprint }}' `
+            -StoreLocations @('LocalMachine\TrustedPeople')
+          if (Test-Path -LiteralPath 'Cert:\LocalMachine\TrustedPeople\${{ steps.cert.outputs.thumbprint }}') {
+            throw 'Hosted build-only trust remained before native QA.'
+          }
+      - name: Native install/start/core-scenario lifecycle round 1
+        shell: pwsh
+        run: >-
+          ./scripts/windows/verify-native.ps1
+          -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix
+          -CandidateManifestPath artifacts/candidate/candidate.json
+          -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer
+          -QaRound 1
+      - name: Native install/start/core-scenario lifecycle round 2 on unchanged bytes
+        shell: pwsh
+        run: >-
+          ./scripts/windows/verify-native.ps1
+          -MsixPath artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_signed-dev.msix
+          -CandidateManifestPath artifacts/candidate/candidate.json
+          -CertificatePath artifacts/candidate/QuantScenarioStudio_signed-dev.cer
+          -QaRound 2
+      - name: Freeze two-pass hashes and privacy-validated UI evidence outside the repository
+        shell: pwsh
+        run: >-
+          ./scripts/windows/generate-hosted-candidate-evidence.ps1
+          -OutputRoot (Join-Path $env:RUNNER_TEMP 'aegis-hosted-candidate-evidence')
+
+      - name: Remove the exact development certificate and all software work products
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Thumbprint = '${{ steps.cert.outputs.thumbprint }}'
+          if ($Thumbprint) {
+            ./scripts/windows/remove-development-certificate.ps1 `
+              -Thumbprint $Thumbprint `
+              -StoreLocations @('CurrentUser\My', 'CurrentUser\Root', 'CurrentUser\TrustedPeople', 'LocalMachine\TrustedPeople') `
+              -DeletePrivateKey `
+              -ExpectedCngKeyName '${{ steps.cert.outputs.key_name }}' `
+              -ExpectedCngKeyUniqueName '${{ steps.cert.outputs.key_unique_name }}' `
+              -ExpectedCngProvider '${{ steps.cert.outputs.key_provider }}'
+          }
+          foreach ($Path in @('${{ steps.cert.outputs.pfx }}', '${{ steps.cert.outputs.cer }}')) {
+            if ([string]::IsNullOrWhiteSpace($Path)) { continue }
+            $Exact = [IO.Path]::GetFullPath($Path)
+            $TempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+            if (-not $Exact.StartsWith($TempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($Exact) -cnotmatch "^aegis-hosted-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT\.(?:pfx|cer)$") {
+              throw 'Hosted development-certificate file escaped the exact RUNNER_TEMP leaf.'
+            }
+            if (Test-Path -LiteralPath $Exact) {
+              $Item = Get-Item -LiteralPath $Exact -Force
+              if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Hosted certificate file is a reparse point.' }
+              Remove-Item -LiteralPath $Exact -Force
+            }
+            if (Test-Path -LiteralPath $Exact) { throw 'Hosted development-certificate file remained after cleanup.' }
+          }
+          $Artifacts = [IO.Path]::GetFullPath((Join-Path $PWD 'artifacts')).TrimEnd('\')
+          if ([IO.Path]::GetFileName($Artifacts) -cne 'artifacts' -or
+              [IO.Path]::GetDirectoryName($Artifacts) -cne [IO.Path]::GetFullPath($PWD).TrimEnd('\')) {
+            throw 'Hosted private-work cleanup escaped the exact repository artifacts leaf.'
+          }
+          if (Test-Path -LiteralPath $Artifacts) {
+            $Entries = @((Get-Item -LiteralPath $Artifacts -Force); Get-ChildItem -LiteralPath $Artifacts -Force -Recurse)
+            if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Hosted private-work tree contains a reparse point.'
+            }
+            Remove-Item -LiteralPath $Artifacts -Recurse -Force
+          }
+          if (Test-Path -LiteralPath $Artifacts) { throw 'Hosted software work products remained after cleanup.' }
+
+      - name: Prove the retained evidence contains no software binary or certificate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Evidence = Join-Path $env:RUNNER_TEMP 'aegis-hosted-candidate-evidence'
+          $Files = @(Get-ChildItem -LiteralPath $Evidence -File -Force -Recurse)
+          $Expected = @(
+            'SHA256SUMS.txt', 'candidate-evidence.json',
+            'round-1-store-listing-about.png', 'round-1-store-listing-home.png',
+            'round-1-store-listing-privacy.png', 'round-1-store-listing-scenarios.png',
+            'round-2-store-listing-about.png', 'round-2-store-listing-home.png',
+            'round-2-store-listing-privacy.png', 'round-2-store-listing-scenarios.png'
+          ) | Sort-Object
+          if (($Files.Name | Sort-Object) -join '|' -cne ($Expected -join '|') -or
+              @($Files | Where-Object { $_.Extension -cnotin @('.txt', '.json', '.png') }).Count -ne 0) {
+            throw 'Hosted public evidence inventory is not the exact JSON/PNG/checksum allowlist.'
+          }
+          Get-Content -LiteralPath (Join-Path $Evidence 'SHA256SUMS.txt') | ForEach-Object {
+            if ($_ -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>[A-Za-z0-9.-]+)$') { throw 'Hosted evidence checksum row is malformed.' }
+            $File = Join-Path $Evidence $Matches.name
+            if (-not (Test-Path -LiteralPath $File -PathType Leaf) -or
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant() -cne $Matches.hash) {
+              throw "Hosted evidence checksum mismatch: $($Matches.name)"
+            }
+          }
+
+      - name: Upload only JSON, PNG and checksum evidence for one day
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-hosted-windows-evidence-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/aegis-hosted-candidate-evidence
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: false

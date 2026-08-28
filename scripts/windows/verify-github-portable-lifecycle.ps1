@@ -27,11 +27,8 @@ $DataParentCreated = -not (Test-Path -LiteralPath $DataParent)
 $PrimaryFailure = $null
 $Started = $null
 try {
-    New-Item -ItemType Directory -Path $TempRoot | Out-Null
-    Expand-Archive -LiteralPath $Archive -DestinationPath $TempRoot
-    $Products = @(Get-ChildItem -LiteralPath $TempRoot -Directory)
-    if ($Products.Count -ne 1 -or $Products[0].Name -cne "QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64") { throw "Portable ZIP top-level directory is invalid." }
-    $ProductRoot = $Products[0].FullName
+    $ArchiveEvidence = & (Join-Path $PSScriptRoot 'verify-portable-archive.ps1') -ArchivePath $Archive -DestinationPath $TempRoot
+    $ProductRoot = [string]$ArchiveEvidence.productRoot
     & (Join-Path $PSScriptRoot "verify-github-signatures.ps1") -Root $ProductRoot
     $ShellPath = [IO.Path]::GetFullPath((Join-Path $ProductRoot "QuantScenarioStudio.exe"))
     $BackendPath = [IO.Path]::GetFullPath((Join-Path $ProductRoot "Backend\AegisBackend.exe"))

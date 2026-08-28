@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign-and-test:
-    name: Read-only signing, exact signatures, and two lifecycle passes
+  build-private-unsigned:
+    name: Build unsigned bytes into the local build-to-signer boundary
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
@@ -25,23 +25,26 @@ jobs:
       github.actor == 'lzy2767865503-pixel' &&
       github.triggering_actor == 'lzy2767865503-pixel' &&
       github.ref == 'refs/heads/main'
-    runs-on: windows-2025
+    runs-on: [self-hosted, windows, x64, aegis-release-build]
     environment: windows-github-release
     timeout-minutes: 360
     permissions:
       contents: read
     outputs:
-      source_commit: ${{ steps.release_metadata.outputs.source_commit }}
-      archive_name: ${{ steps.release_metadata.outputs.archive_name }}
-      archive_sha256: ${{ steps.release_metadata.outputs.archive_sha256 }}
-      checksum_sha256: ${{ steps.release_metadata.outputs.checksum_sha256 }}
-      signer_thumbprint: ${{ steps.release_metadata.outputs.signer_thumbprint }}
+      source_commit: ${{ steps.private_handoff.outputs.source_commit }}
+      handoff_leaf: ${{ steps.private_handoff.outputs.handoff_leaf }}
+      input_tree_sha256: ${{ steps.private_handoff.outputs.input_tree_sha256 }}
     env:
       AEGIS_TRUSTED_GITHUB_BUILD: "1"
       RELEASE_TAG: ${{ inputs.release_tag }}
       APPROVED_TAG: ${{ vars.AEGIS_GITHUB_RELEASE_APPROVAL_TAG }}
       AEGIS_TAG_RULESET_ID: "21631608"
       AEGIS_MAIN_RULESET_ID: "21633557"
+      AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT: ${{ vars.AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT }}
+      AEGIS_RELEASE_BUILD_RUNNER_NAME: ${{ vars.AEGIS_RELEASE_BUILD_RUNNER_NAME }}
+      AEGIS_RELEASE_SIGNER_RUNNER_NAME: ${{ vars.AEGIS_RELEASE_SIGNER_RUNNER_NAME }}
+      AEGIS_RELEASE_BUILD_ACCOUNT_SID: ${{ vars.AEGIS_RELEASE_BUILD_ACCOUNT_SID }}
+      AEGIS_RELEASE_SIGNER_ACCOUNT_SID: ${{ vars.AEGIS_RELEASE_SIGNER_ACCOUNT_SID }}
       ARCHIVE_NAME: QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip
     steps:
       - name: Check out the exact selected immutable tag
@@ -51,13 +54,7 @@ jobs:
           ref: ${{ inputs.release_tag }}
           persist-credentials: false
 
-      - name: Initialize this run's exact temporary CKA path
-        shell: pwsh
-        run: |
-          $Root = Join-Path $env:RUNNER_TEMP "aegis-esigner-cka-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          "CKA_WORKING_ROOT=$Root" >> $env:GITHUB_ENV
-
-      - name: Require exact tag, protected main, protected approval, and empty Release slot
+      - name: Require exact tag, protected main, separate build identity, and empty Release slot
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,6 +72,24 @@ jobs:
           if ($env:RELEASE_TAG -cne 'windows-v1.5.0' -or $env:APPROVED_TAG -cne $env:RELEASE_TAG) {
             throw 'The protected environment must approve exactly windows-v1.5.0.'
           }
+          if ($env:RUNNER_NAME -cne $env:AEGIS_RELEASE_BUILD_RUNNER_NAME -or
+              [string]::IsNullOrWhiteSpace($env:AEGIS_RELEASE_SIGNER_RUNNER_NAME) -or
+              $env:AEGIS_RELEASE_BUILD_RUNNER_NAME -ceq $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME -or
+              $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -cnotmatch '^S-1-(?:\d+-){1,14}\d+$' -or
+              $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -cnotmatch '^S-1-(?:\d+-){1,14}\d+$' -or
+              $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -ceq $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -or
+              [string]::IsNullOrWhiteSpace($env:AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT)) {
+            throw 'Protected build/sign runner names, separate account SIDs, and the private NTFS handoff root must be configured exactly.'
+          }
+          $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          try {
+            $CurrentSid = [string]$Identity.User.Value
+            $BuildPrincipal = [Security.Principal.WindowsPrincipal]::new($Identity)
+            $BuildIsAdministrator = $BuildPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          } finally { $Identity.Dispose() }
+          if ($CurrentSid -cne $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -or $BuildIsAdministrator) {
+            throw 'This job must run as the exact non-Administrators protected build account.'
+          }
           if ($env:AEGIS_TAG_RULESET_ID -cne '21631608' -or $env:AEGIS_MAIN_RULESET_ID -cne '21633557') {
             throw 'A protected repository ruleset ID drifted.'
           }
@@ -90,11 +105,13 @@ jobs:
             $MainRuleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$env:AEGIS_MAIN_RULESET_ID" | ConvertFrom-Json
             $MainTypes = @($MainRuleset.rules | ForEach-Object type | Sort-Object)
             $PullRules = @($MainRuleset.rules | Where-Object type -ceq 'pull_request')
+            $StatusRules = @($MainRuleset.rules | Where-Object type -ceq 'required_status_checks')
             if ($LASTEXITCODE -ne 0 -or [long]$MainRuleset.id -ne 21633557 -or $MainRuleset.enforcement -cne 'active' -or
                 $MainRuleset.target -cne 'branch' -or @($MainRuleset.bypass_actors).Count -ne 0 -or
                 (@($MainRuleset.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
                 @($MainRuleset.conditions.ref_name.exclude).Count -ne 0 -or
-                ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or $PullRules.Count -ne 1) {
+                ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks' -or
+                $PullRules.Count -ne 1 -or $StatusRules.Count -ne 1) {
               throw 'The active no-bypass protected-main lineage ruleset is not exact.'
             }
             $Parameters = $PullRules[0].parameters
@@ -107,6 +124,18 @@ jobs:
                 $Parameters.require_last_push_approval -or [int]$Parameters.required_approving_review_count -ne 0 -or
                 @($Parameters.required_reviewers).Count -ne 0) {
               throw 'The exact main pull-request/review-thread-resolution policy drifted.'
+            }
+            $StatusParameters = $StatusRules[0].parameters
+            $StatusKeys = @($StatusParameters.PSObject.Properties.Name | Sort-Object)
+            $ExpectedStatusKeys = @('do_not_enforce_on_create', 'required_status_checks', 'strict_required_status_checks_policy') | Sort-Object
+            $Checks = @($StatusParameters.required_status_checks)
+            $Contexts = @($Checks | ForEach-Object { [string]$_.context } | Sort-Object)
+            if (($StatusKeys -join '|') -cne ($ExpectedStatusKeys -join '|') -or
+                -not $StatusParameters.strict_required_status_checks_policy -or $StatusParameters.do_not_enforce_on_create -or
+                $Checks.Count -ne 2 -or ($Contexts -join '|') -cne 'verify (3.10)|verify (3.12)' -or
+                @($Checks | Where-Object { [long]$_.integration_id -ne 15368 }).Count -ne 0 -or
+                @($Checks | Where-Object { (@($_.PSObject.Properties.Name | Sort-Object) -join '|') -cne 'context|integration_id' }).Count -ne 0) {
+              throw 'The exact strict GitHub Actions required-status-check policy drifted.'
             }
           }
           Assert-Rulesets
@@ -160,104 +189,16 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/build-github-portable.ps1 -OutputRoot artifacts/github-release/portable
 
-      - name: Install and load the pinned SSL.com CKA/KSP client
-        id: cka
+      - name: Atomically retain only the unsigned input in the local exact-ACL signer handoff
+        id: private_handoff
         shell: pwsh
-        env:
-          SSL_ESIGNER_USERNAME: ${{ secrets.SSL_ESIGNER_USERNAME }}
-          SSL_ESIGNER_PASSWORD: ${{ secrets.SSL_ESIGNER_PASSWORD }}
-          SSL_ESIGNER_TOTP_SECRET: ${{ secrets.SSL_ESIGNER_TOTP_SECRET }}
-        run: ./scripts/windows/setup-esigner-cka.ps1 -WorkingRoot $env:CKA_WORKING_ROOT
-
-      - name: Cloud-HSM sign and strictly verify every recursively discovered PE
-        shell: pwsh
-        run: |
-          ./scripts/windows/sign-github-portable.ps1 -PortableRoot artifacts/github-release/portable -CertificateThumbprint '${{ steps.cka.outputs.thumbprint }}'
-          ./scripts/windows/verify-github-signatures.ps1 -Root artifacts/github-release/portable -ExpectedThumbprint '${{ steps.cka.outputs.thumbprint }}'
-
-      - name: Create the only public archive after trusted signing
-        shell: pwsh
-        run: ./scripts/windows/new-github-portable-archive.ps1 -PortableRoot artifacts/github-release/portable -ArchivePath (Join-Path $PWD "artifacts/github-release/$env:ARCHIVE_NAME")
-
-      - name: Signed same-byte portable lifecycle round 1
-        timeout-minutes: 40
-        shell: pwsh
-        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 1
-      - name: Signed same-byte portable lifecycle round 2
-        timeout-minutes: 40
-        shell: pwsh
-        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 2
-
-      - name: Remove the temporary cloud signer and all CKA state
-        if: always()
-        shell: pwsh
-        run: ./scripts/windows/cleanup-esigner-cka.ps1 -WorkingRoot $env:CKA_WORKING_ROOT -InstallRoot (Join-Path $env:CKA_WORKING_ROOT 'installed') -StateRoot (Join-Path $env:APPDATA 'eSignerCKA')
-
-      - name: Freeze exact publication inputs only after signer cleanup
-        id: release_metadata
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Set-StrictMode -Version Latest
-          if ((Test-Path -LiteralPath $env:CKA_WORKING_ROOT) -or (Test-Path -LiteralPath (Join-Path $env:APPDATA 'eSignerCKA'))) { throw 'Cloud signer state remains after mandatory cleanup.' }
-          $ResidualPermittedSigners = @(
-            Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
-              Where-Object { @('LAI ZEYU', '来泽宇') -ccontains $_.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) }
-          )
-          if ($ResidualPermittedSigners.Count -ne 0) { throw 'An exact-name cloud signing certificate remains after mandatory CKA cleanup.' }
-          $ReleaseRoot = (Resolve-Path -LiteralPath artifacts/github-release).Path
-          $Archive = Join-Path $ReleaseRoot $env:ARCHIVE_NAME
-          $Checksum = "$Archive.sha256"
-          $Inventory = @(Get-ChildItem -LiteralPath $ReleaseRoot -File | ForEach-Object Name | Sort-Object)
-          $ExpectedInventory = @($env:ARCHIVE_NAME, "$env:ARCHIVE_NAME.sha256") | Sort-Object
-          if (($Inventory -join '|') -cne ($ExpectedInventory -join '|')) { throw 'Final public release inventory is not exact.' }
-          $ArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-          $ChecksumHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Checksum).Hash.ToLowerInvariant()
-          if ((Get-Content -Raw -LiteralPath $Checksum).Trim() -cne "$ArchiveHash  $env:ARCHIVE_NAME") { throw 'Final ZIP checksum is not canonical.' }
-          $Expanded = Join-Path $env:RUNNER_TEMP ("aegis-freeze-" + [Guid]::NewGuid().ToString('N'))
-          try {
-            Expand-Archive -LiteralPath $Archive -DestinationPath $Expanded
-            $Product = @(Get-ChildItem -LiteralPath $Expanded -Directory)
-            if ($Product.Count -ne 1 -or $Product[0].Name -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64') { throw 'Final ZIP top-level schema is invalid.' }
-            ./scripts/windows/verify-github-signatures.ps1 -Root $Product[0].FullName -ExpectedThumbprint '${{ steps.cka.outputs.thumbprint }}'
-          } finally { if (Test-Path -LiteralPath $Expanded) { Remove-Item -LiteralPath $Expanded -Recurse -Force } }
-          & git fetch --force origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)"
-          & git fetch --force origin 'refs/heads/main:refs/remotes/origin/main'
-          $TagCommit = (& git rev-parse "$($env:RELEASE_TAG)^{}").Trim().ToLowerInvariant()
-          $HeadCommit = (& git rev-parse HEAD).Trim().ToLowerInvariant()
-          $MainCommit = (& git rev-parse refs/remotes/origin/main).Trim().ToLowerInvariant()
-          if ($TagCommit -cne $env:SELECTED_RELEASE_COMMIT -or $HeadCommit -cne $env:SELECTED_RELEASE_COMMIT -or $MainCommit -cne $env:SELECTED_RELEASE_COMMIT) { throw 'Tag, HEAD, or protected main changed before handoff.' }
-          foreach ($RuleId in @($env:AEGIS_TAG_RULESET_ID, $env:AEGIS_MAIN_RULESET_ID)) {
-            $Ruleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$RuleId" | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $Ruleset.enforcement -cne 'active' -or @($Ruleset.bypass_actors).Count -ne 0) { throw "Protected ruleset $RuleId changed before handoff." }
-          }
-          $PSNativeCommandUseErrorActionPreference = $false
-          $Probe = @(& gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" 2>&1)
-          $ProbeExit = $LASTEXITCODE
-          $PSNativeCommandUseErrorActionPreference = $true
-          if ($ProbeExit -eq 0 -or ($Probe -join "`n") -notmatch '(?i)\bHTTP\s+404\b') { throw 'Release slot is no longer provably empty.' }
-          "source_commit=$TagCommit" >> $env:GITHUB_OUTPUT
-          "archive_name=$env:ARCHIVE_NAME" >> $env:GITHUB_OUTPUT
-          "archive_sha256=$ArchiveHash" >> $env:GITHUB_OUTPUT
-          "checksum_sha256=$ChecksumHash" >> $env:GITHUB_OUTPUT
-          $SignerThumbprint = '${{ steps.cka.outputs.thumbprint }}'.ToLowerInvariant()
-          if ($SignerThumbprint -cnotmatch '^[0-9a-f]{40}$') { throw 'Frozen signer thumbprint is invalid.' }
-          "signer_thumbprint=$SignerThumbprint" >> $env:GITHUB_OUTPUT
-
-      - name: Upload only the tested signed ZIP and checksum for the isolated publisher
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: aegis-signed-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/github-release/QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip
-            artifacts/github-release/QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip.sha256
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-          include-hidden-files: false
+        run: >-
+          ./scripts/windows/retain-private-signing-handoff.ps1
+          -PrivateRoot $env:AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT
+          -BuildAccountSid $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID
+          -SignerAccountSid $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID
+          -ExpectedBuildRunnerName $env:AEGIS_RELEASE_BUILD_RUNNER_NAME
+          -ExpectedSignerRunnerName $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME
 
       - name: Remove all private build work products after handoff
         if: always()
@@ -282,9 +223,959 @@ jobs:
           }
           if ($Errors.Count -ne 0) { throw "Release work-product cleanup failed: $($Errors -join ' | ')" }
 
+  sign-private-no-checkout:
+    name: No-checkout isolated signer on the separate protected account
+    needs: build-private-unsigned
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
+      github.repository_owner == 'lzy2767865503-pixel' &&
+      github.actor == 'lzy2767865503-pixel' &&
+      github.triggering_actor == 'lzy2767865503-pixel' &&
+      github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, windows, x64, aegis-release-signer]
+    environment: windows-github-release
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    outputs:
+      archive_name: ${{ steps.signed_metadata.outputs.archive_name }}
+      archive_sha256: ${{ steps.signed_metadata.outputs.archive_sha256 }}
+      checksum_sha256: ${{ steps.signed_metadata.outputs.checksum_sha256 }}
+      signer_thumbprint: ${{ steps.signed_metadata.outputs.signer_thumbprint }}
+      archive_entry_count: ${{ steps.signed_metadata.outputs.archive_entry_count }}
+      archive_file_count: ${{ steps.signed_metadata.outputs.archive_file_count }}
+      archive_expanded_size: ${{ steps.signed_metadata.outputs.archive_expanded_size }}
+      archive_inventory_sha256: ${{ steps.signed_metadata.outputs.archive_inventory_sha256 }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_COMMIT: ${{ needs.build-private-unsigned.outputs.source_commit }}
+      HANDOFF_LEAF: ${{ needs.build-private-unsigned.outputs.handoff_leaf }}
+      INPUT_TREE_SHA256: ${{ needs.build-private-unsigned.outputs.input_tree_sha256 }}
+      ARCHIVE_NAME: QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip
+      AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT: ${{ vars.AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT }}
+      AEGIS_RELEASE_BUILD_RUNNER_NAME: ${{ vars.AEGIS_RELEASE_BUILD_RUNNER_NAME }}
+      AEGIS_RELEASE_SIGNER_RUNNER_NAME: ${{ vars.AEGIS_RELEASE_SIGNER_RUNNER_NAME }}
+      AEGIS_RELEASE_BUILD_ACCOUNT_SID: ${{ vars.AEGIS_RELEASE_BUILD_ACCOUNT_SID }}
+      AEGIS_RELEASE_SIGNER_ACCOUNT_SID: ${{ vars.AEGIS_RELEASE_SIGNER_ACCOUNT_SID }}
+      AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_PATH: ${{ vars.AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_PATH }}
+      AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256: ${{ vars.AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256 }}
+      AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT: ${{ vars.AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT }}
+      AEGIS_ESIGNER_CREDENTIAL_TRANSPORT: ${{ vars.AEGIS_ESIGNER_CREDENTIAL_TRANSPORT }}
+    steps:
+      # Deliberately no checkout and no downloaded action before the only secret-bearing step.
+      - name: Verify the no-checkout account, exact ACL handoff, and out-of-band signer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          if ($env:RUNNER_NAME -cne $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME -or
+              $env:AEGIS_RELEASE_BUILD_RUNNER_NAME -ceq $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME -or
+              $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -cnotmatch '^S-1-(?:\d+-){1,14}\d+$' -or
+              $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -cnotmatch '^S-1-(?:\d+-){1,14}\d+$' -or
+              $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -ceq $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -or
+              $env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or $env:INPUT_TREE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:RELEASE_TAG -cne 'windows-v1.5.0' -or $env:ARCHIVE_NAME -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip' -or
+              $env:HANDOFF_LEAF -cnotmatch '^aegis-github-1\.5\.0-\d+-\d+-[0-9a-f]{12}$') {
+            throw 'The protected signer runner/account or exact build handoff identity is not configured.'
+          }
+          $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          try { $CurrentSid = [string]$Identity.User.Value } finally { $Identity.Dispose() }
+          if ($CurrentSid -cne $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID) { throw 'This is not the protected no-checkout signer account.' }
+          if (Test-Path -LiteralPath $env:GITHUB_WORKSPACE) {
+            $WorkspaceEntries = @(Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force -ErrorAction Stop)
+            if ($WorkspaceEntries.Count -ne 0) { throw 'Signer workspace is not empty; repository code may have been checked out on this account.' }
+          }
+          if ($env:AEGIS_ESIGNER_CREDENTIAL_TRANSPORT -cne 'ENVIRONMENT_ONLY_NO_ARGV') {
+            throw 'Fail-closed: the approved signer must prove a no-argv credential transport; the repository CKA CLI path is forbidden.'
+          }
+
+          function Get-AclEvidence([string]$Path) {
+            $Acl = Get-Acl -LiteralPath $Path
+            return [pscustomobject]@{
+              acl = $Acl
+              rules = @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+              owner = [string]$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+            }
+          }
+          function Assert-NoUnsafeWritableAncestor([string]$Path, [string]$VolumeRoot) {
+            $Broad = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545', 'S-1-5-32-546')
+            $Dangerous = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Modify -bor
+              [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+              [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+            $Current = Get-Item -LiteralPath $Path -Force
+            while ($Current) {
+              if (($Current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Protected signer path has a reparse-point ancestor.' }
+              $AclEvidence = Get-AclEvidence $Current.FullName
+              if (@($AclEvidence.rules | Where-Object {
+                $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                (([string]$_.IdentityReference.Value -cin $Broad) -or [string]$_.IdentityReference.Value -ceq $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID) -and
+                (($_.FileSystemRights -band $Dangerous) -ne 0)
+              }).Count -ne 0) { throw 'Protected signer ancestor is writable by the build SID or a broad principal.' }
+              if ($Current.FullName.TrimEnd('\').Equals($VolumeRoot.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return }
+              $Current = $Current.Parent
+            }
+            throw 'Protected signer path did not reach its local fixed-volume root.'
+          }
+          function Assert-ExactFullAcl([string]$Path, [string[]]$Allowed, [string[]]$Owners, [string]$Label) {
+            $Evidence = Get-AclEvidence $Path
+            $Expected = @($Allowed | Sort-Object -Unique)
+            $Actual = @($Evidence.rules | ForEach-Object { [string]$_.IdentityReference.Value } | Sort-Object -Unique)
+            if (-not $Evidence.acl.AreAccessRulesProtected -or ($Actual -join '|') -cne ($Expected -join '|') -or
+                $Evidence.owner -cnotin $Owners -or @($Evidence.rules | Where-Object { $_.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow }).Count -ne 0) {
+              throw "$Label exact protected ACL/owner is invalid."
+            }
+            foreach ($Sid in $Expected) {
+              if (@($Evidence.rules | Where-Object { [string]$_.IdentityReference.Value -ceq $Sid -and
+                  (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl) }).Count -lt 1) {
+                throw "$Label lacks FullControl for an exact approved SID."
+              }
+            }
+          }
+          function Assert-PrivateRootAcl([string]$Path) {
+            $Evidence = Get-AclEvidence $Path
+            $Expected = @($env:AEGIS_RELEASE_BUILD_ACCOUNT_SID, $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18') | Sort-Object
+            $Actual = @($Evidence.rules | ForEach-Object { [string]$_.IdentityReference.Value } | Sort-Object -Unique)
+            $Dangerous = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Modify -bor
+              [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+              [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+            $BuildRules = @($Evidence.rules | Where-Object { [string]$_.IdentityReference.Value -ceq $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID })
+            if (-not $Evidence.acl.AreAccessRulesProtected -or ($Actual -join '|') -cne ($Expected -join '|') -or
+                $Evidence.owner -cnotin @($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18') -or $BuildRules.Count -ne 1 -or
+                ($BuildRules[0].FileSystemRights -band $Dangerous) -ne 0 -or
+                ($BuildRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) -ne [Security.AccessControl.FileSystemRights]::ReadAndExecute -or
+                $BuildRules[0].InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None) {
+              throw 'Private signing root must be signer/SYSTEM-owned and grant the build SID non-inheriting traverse/read only.'
+            }
+          }
+          function Set-SignerOnlyAcl([string]$Path) {
+            $Item = Get-Item -LiteralPath $Path -Force
+            $Security = if ($Item.PSIsContainer) { [Security.AccessControl.DirectorySecurity]::new() } else { [Security.AccessControl.FileSecurity]::new() }
+            $Security.SetOwner([Security.Principal.SecurityIdentifier]::new($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID))
+            $Security.SetAccessRuleProtection($true, $false)
+            foreach ($Sid in @($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18')) {
+              $Inheritance = if ($Item.PSIsContainer) { [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' } else { [Security.AccessControl.InheritanceFlags]::None }
+              $Rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($Sid), [Security.AccessControl.FileSystemRights]::FullControl,
+                $Inheritance, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
+              [void]$Security.AddAccessRule($Rule)
+            }
+            Set-Acl -LiteralPath $Path -AclObject $Security
+          }
+          function Get-TreeEvidence([string]$Root) {
+            $ExactRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+            $RootItem = Get-Item -LiteralPath $ExactRoot -Force
+            $Entries = @(Get-ChildItem -LiteralPath $ExactRoot -Recurse -Force)
+            if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw 'Signing input has a reparse point.' }
+            if (@($Entries | Where-Object { $_.PSIsContainer -and @(Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force).Count -eq 0 }).Count -ne 0) {
+              throw 'Signing input has an unbound empty directory.'
+            }
+            $Files = @($Entries | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)
+            if ($Files.Count -lt 2 -or $Files.Count -gt 20000) { throw 'Signing input file count is outside the strict bound.' }
+            $Rows = [Collections.Generic.List[object]]::new()
+            [long]$Total = 0
+            foreach ($File in $Files) {
+              $Relative = [IO.Path]::GetRelativePath($ExactRoot, $File.FullName).Replace('\', '/')
+              $Total += [long]$File.Length
+              if ([string]::IsNullOrWhiteSpace($Relative) -or $Relative.StartsWith('../', [StringComparison]::Ordinal) -or
+                  [IO.Path]::IsPathRooted($Relative) -or $File.Length -gt 512MB -or $Total -gt 2GB) { throw 'Signing input path or size escaped its strict boundary.' }
+              $Rows.Add([ordered]@{ path = $Relative; size = [long]$File.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant() })
+            }
+            $Canonical = (@($Rows | ForEach-Object { "$($_.sha256) $($_.size) $($_.path)" }) -join "`n") + "`n"
+            $Hasher = [Security.Cryptography.SHA256]::Create()
+            try { $Hash = [Convert]::ToHexString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Canonical))).ToLowerInvariant() } finally { $Hasher.Dispose() }
+            return [pscustomobject]@{ files = @($Rows); sha256 = $Hash }
+          }
+
+          $PrivateRoot = [IO.Path]::GetFullPath($env:AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT).TrimEnd('\')
+          if (-not [IO.Path]::IsPathFullyQualified($PrivateRoot) -or $PrivateRoot.StartsWith('\\') -or
+              [IO.Path]::GetFileName($PrivateRoot) -cne 'AegisGitHubSigningHandoff' -or -not (Test-Path -LiteralPath $PrivateRoot -PathType Container)) {
+            throw 'The pre-provisioned private signing root is missing or malformed.'
+          }
+          $VolumeRoot = [IO.Path]::GetPathRoot($PrivateRoot)
+          $Drive = [IO.DriveInfo]::new($VolumeRoot)
+          if (-not $Drive.IsReady -or $Drive.DriveType -ne [IO.DriveType]::Fixed -or $Drive.DriveFormat -cne 'NTFS') { throw 'Private signing root is not on fixed NTFS.' }
+          foreach ($Forbidden in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+            if (-not $Forbidden) { continue }
+            $ExactForbidden = [IO.Path]::GetFullPath($Forbidden).TrimEnd('\')
+            if ($PrivateRoot.Equals($ExactForbidden, [StringComparison]::OrdinalIgnoreCase) -or
+                $PrivateRoot.StartsWith($ExactForbidden + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                $ExactForbidden.StartsWith($PrivateRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Private signing root overlaps an unsafe location.' }
+          }
+          Assert-NoUnsafeWritableAncestor -Path $PrivateRoot -VolumeRoot $VolumeRoot
+          Assert-PrivateRootAcl $PrivateRoot
+          $IngressRoot = Join-Path $PrivateRoot 'ingress'
+          $VaultRoot = Join-Path $PrivateRoot 'signer-vault'
+          foreach ($BoundaryRoot in @($IngressRoot, $VaultRoot)) {
+            $BoundaryItem = Get-Item -LiteralPath $BoundaryRoot -Force
+            if (($BoundaryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                -not $BoundaryItem.Parent.FullName.TrimEnd('\').Equals($PrivateRoot, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Ingress and signer-vault must be direct non-reparse children of the exact private root.'
+            }
+          }
+          $IngressAllowed = @($env:AEGIS_RELEASE_BUILD_ACCOUNT_SID, $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18')
+          $VaultAllowed = @($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18')
+          Assert-ExactFullAcl -Path $IngressRoot -Allowed $IngressAllowed -Owners $IngressAllowed -Label 'Signing ingress root'
+          Assert-ExactFullAcl -Path $VaultRoot -Allowed $VaultAllowed -Owners $VaultAllowed -Label 'Signer-only vault root'
+          $IngressRun = Join-Path $IngressRoot $env:HANDOFF_LEAF
+          $VaultClaiming = Join-Path $VaultRoot "$env:HANDOFF_LEAF.claiming"
+          $VaultRun = Join-Path $VaultRoot $env:HANDOFF_LEAF
+          if (-not (Test-Path -LiteralPath $IngressRun -PathType Container) -or
+              (Test-Path -LiteralPath "$IngressRun.incomplete") -or (Test-Path -LiteralPath $VaultClaiming) -or (Test-Path -LiteralPath $VaultRun)) {
+            throw 'The exact ingress exists once and the signer-only claim destination is empty.'
+          }
+          $IngressManifestPath = Join-Path $IngressRun 'unsigned-signing-handoff.json'
+          $IngressInputRoot = Join-Path $IngressRun 'portable-unsigned'
+          $IngressTop = @(Get-ChildItem -LiteralPath $IngressRun -Force)
+          if ($IngressTop.Count -ne 2 -or
+              @($IngressTop | Where-Object { $_.Name -ceq 'portable-unsigned' -and $_.PSIsContainer }).Count -ne 1 -or
+              @($IngressTop | Where-Object { $_.Name -ceq 'unsigned-signing-handoff.json' -and -not $_.PSIsContainer }).Count -ne 1) {
+            throw 'Ingress top-level inventory is not the exact unsigned directory and manifest.'
+          }
+          $IngressEntriesBeforeClaim = @((Get-Item -LiteralPath $IngressRun -Force); Get-ChildItem -LiteralPath $IngressRun -Recurse -Force)
+          if (@($IngressEntriesBeforeClaim | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+            throw 'Ingress contains a junction/reparse point before exclusive ACL transfer.'
+          }
+          $IngressManifestHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $IngressManifestPath).Hash.ToLowerInvariant()
+          $IngressEvidenceBefore = Get-TreeEvidence -Root $IngressInputRoot
+          # Phase 1: revoke the build SID from every ingress object before crossing
+          # into the signer-only parent. A same-account open-handle race is caught
+          # by the before/after content evidence; a parent delete/rename race makes
+          # the exact atomic move fail closed.
+          foreach ($Entry in $IngressEntriesBeforeClaim) { Set-SignerOnlyAcl $Entry.FullName }
+          foreach ($Entry in @((Get-Item -LiteralPath $IngressRun -Force); Get-ChildItem -LiteralPath $IngressRun -Recurse -Force)) {
+            Assert-ExactFullAcl -Path $Entry.FullName -Allowed $VaultAllowed -Owners $VaultAllowed -Label "Claimed ingress $($Entry.Name)"
+          }
+          $IngressEvidenceAfterClaim = Get-TreeEvidence -Root $IngressInputRoot
+          $IngressManifestHashAfterClaim = (Get-FileHash -Algorithm SHA256 -LiteralPath $IngressManifestPath).Hash.ToLowerInvariant()
+          if ($IngressEvidenceBefore.sha256 -cne $IngressEvidenceAfterClaim.sha256 -or
+              $IngressManifestHashBefore -cne $IngressManifestHashAfterClaim) {
+            throw 'Signer claim rejected a concurrent ingress replacement during exclusive ACL transfer.'
+          }
+          [IO.Directory]::Move($IngressRun, $VaultClaiming)
+          if (Test-Path -LiteralPath $IngressRun) { throw 'Build-writable ingress identity remained after atomic signer-vault transfer.' }
+          $VaultInputRoot = Join-Path $VaultClaiming 'portable-unsigned'
+          $VaultManifestPath = Join-Path $VaultClaiming 'unsigned-signing-handoff.json'
+          $VaultEvidence = Get-TreeEvidence -Root $VaultInputRoot
+          $VaultManifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $VaultManifestPath).Hash.ToLowerInvariant()
+          if ($IngressEvidenceBefore.sha256 -cne $env:INPUT_TREE_SHA256 -or $VaultEvidence.sha256 -cne $env:INPUT_TREE_SHA256 -or
+              $IngressEvidenceAfterClaim.sha256 -cne $env:INPUT_TREE_SHA256 -or $IngressManifestHashBefore -cne $IngressManifestHashAfterClaim -or
+              $VaultManifestHash -cne $IngressManifestHashBefore) {
+            throw 'Signer claim rejected a concurrent ingress replacement or changed signer-vault transfer.'
+          }
+          $Manifest = Get-Content -Raw -LiteralPath $VaultManifestPath | ConvertFrom-Json
+          $ManifestKeys = @($Manifest.PSObject.Properties.Name | Sort-Object)
+          $ExpectedManifestKeys = @('administratorsAclAllowed','archiveName','author','buildAccountIsAdministrator','buildAccountSid','buildRunnerName','githubArtifactUploaded','githubRunAttempt','githubRunId','handoffPhase','ingressSubdirectory','inputFiles','inputTreeSha256','machineGuidSha256','product','releaseTag','schemaVersion','signerAccountSid','signerRunnerName','sourceCommit','storageBoundary','unsignedInput','vaultSubdirectory') | Sort-Object
+          $MachineGuid = [string](Get-ItemPropertyValue -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid)
+          $MachineHasher = [Security.Cryptography.SHA256]::Create()
+          try { $MachineGuidSha256 = [Convert]::ToHexString($MachineHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($MachineGuid.ToLowerInvariant()))).ToLowerInvariant() } finally { $MachineHasher.Dispose() }
+          if (($ManifestKeys -join '|') -cne ($ExpectedManifestKeys -join '|') -or $Manifest.schemaVersion -ne 2 -or
+              $Manifest.sourceCommit -cne $env:SOURCE_COMMIT -or $Manifest.releaseTag -cne $env:RELEASE_TAG -or
+              $Manifest.archiveName -cne $env:ARCHIVE_NAME -or $Manifest.buildRunnerName -cne $env:AEGIS_RELEASE_BUILD_RUNNER_NAME -or
+              $Manifest.signerRunnerName -cne $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME -or
+              $Manifest.buildAccountSid -cne $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID -or $Manifest.signerAccountSid -cne $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -or
+              $Manifest.machineGuidSha256 -cne $MachineGuidSha256 -or $Manifest.buildAccountIsAdministrator -or $Manifest.administratorsAclAllowed -or
+              $Manifest.inputTreeSha256 -cne $env:INPUT_TREE_SHA256 -or -not $Manifest.unsignedInput -or $Manifest.githubArtifactUploaded -or
+              $Manifest.ingressSubdirectory -cne 'ingress' -or $Manifest.vaultSubdirectory -cne 'signer-vault' -or
+              $Manifest.handoffPhase -cne 'INGRESS_READY_FOR_EXCLUSIVE_SIGNER_CLAIM' -or
+              $Manifest.storageBoundary -cne 'LOCAL_FIXED_NTFS_SPLIT_EXCLUSIVE_ACL' -or
+              ($VaultEvidence.files | ConvertTo-Json -Depth 4 -Compress) -cne (@($Manifest.inputFiles) | ConvertTo-Json -Depth 4 -Compress)) {
+            throw 'Unsigned signing handoff manifest is not exact.'
+          }
+          [IO.Directory]::Move($VaultClaiming, $VaultRun)
+          $InputRoot = Join-Path $VaultRun 'portable-unsigned'
+          $ManifestPath = Join-Path $VaultRun 'unsigned-signing-handoff.json'
+          $FinalVaultEvidence = Get-TreeEvidence -Root $InputRoot
+          if ($FinalVaultEvidence.sha256 -cne $env:INPUT_TREE_SHA256) { throw 'Signer-vault atomic completion changed the claimed input.' }
+          foreach ($Entry in @((Get-Item -LiteralPath $VaultRun -Force); Get-ChildItem -LiteralPath $VaultRun -Recurse -Force)) {
+            Assert-ExactFullAcl -Path $Entry.FullName -Allowed $VaultAllowed -Owners $VaultAllowed -Label $Entry.Name
+          }
+          if (Test-Path -LiteralPath $IngressRun) { throw 'Build-writable ingress remained after signer-only vault claim.' }
+
+          $Orchestrator = [IO.Path]::GetFullPath($env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_PATH)
+          if (-not [IO.Path]::IsPathFullyQualified($Orchestrator) -or -not (Test-Path -LiteralPath $Orchestrator -PathType Leaf) -or
+              $Orchestrator.StartsWith($PrivateRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+              ($env:GITHUB_WORKSPACE -and $Orchestrator.StartsWith([IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) -or
+              $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Orchestrator).Hash.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256 -or
+              $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT -cnotmatch '^[0-9a-f]{40}$') { throw 'The out-of-band signer orchestrator path/hash policy is not exact.' }
+          $OrchestratorItem = Get-Item -LiteralPath $Orchestrator -Force
+          if (($OrchestratorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Trusted signer orchestrator is a reparse point.' }
+          $OrchestratorVolume = [IO.Path]::GetPathRoot($Orchestrator)
+          $OrchestratorDrive = [IO.DriveInfo]::new($OrchestratorVolume)
+          if (-not $OrchestratorDrive.IsReady -or $OrchestratorDrive.DriveType -ne [IO.DriveType]::Fixed -or $OrchestratorDrive.DriveFormat -cne 'NTFS') {
+            throw 'Trusted signer orchestrator must be on local fixed NTFS.'
+          }
+          Assert-NoUnsafeWritableAncestor -Path $Orchestrator -VolumeRoot $OrchestratorVolume
+          $OrchestratorSignature = Get-AuthenticodeSignature -LiteralPath $Orchestrator
+          if ($OrchestratorSignature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $OrchestratorSignature.SignerCertificate -or
+              $OrchestratorSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT) { throw 'The hash-bound out-of-band signer orchestrator lacks its exact trusted Authenticode signer.' }
+          $SignedOutput = Join-Path $VaultRun 'signed-output'
+          if (Test-Path -LiteralPath $SignedOutput) { throw 'Signer output must not preexist.' }
+          "AEGIS_VALIDATED_SIGNER_ORCHESTRATOR=$Orchestrator" >> $env:GITHUB_ENV
+          "AEGIS_VALIDATED_SIGNER_VAULT=$VaultRun" >> $env:GITHUB_ENV
+          "AEGIS_SIGNER_MACHINE_GUID_SHA256=$MachineGuidSha256" >> $env:GITHUB_ENV
+          "AEGIS_VALIDATED_UNSIGNED_INPUT=$InputRoot" >> $env:GITHUB_ENV
+          "AEGIS_VALIDATED_UNSIGNED_MANIFEST=$ManifestPath" >> $env:GITHUB_ENV
+          "AEGIS_VALIDATED_SIGNED_OUTPUT=$SignedOutput" >> $env:GITHUB_ENV
+
+      - name: Sign through the trusted no-argv orchestrator and remove all signer state
+        shell: pwsh
+        env:
+          SSL_ESIGNER_USERNAME: ${{ secrets.SSL_ESIGNER_USERNAME }}
+          SSL_ESIGNER_PASSWORD: ${{ secrets.SSL_ESIGNER_PASSWORD }}
+          SSL_ESIGNER_TOTP_SECRET: ${{ secrets.SSL_ESIGNER_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          $SecretNames = @('SSL_ESIGNER_USERNAME', 'SSL_ESIGNER_PASSWORD', 'SSL_ESIGNER_TOTP_SECRET')
+          foreach ($Name in $SecretNames) {
+            $Value = [Environment]::GetEnvironmentVariable($Name, 'Process')
+            if ([string]::IsNullOrWhiteSpace($Value)) { throw "Protected signer secret $Name is missing." }
+            Write-Output "::add-mask::$Value"
+          }
+          if ($env:AEGIS_ESIGNER_CREDENTIAL_TRANSPORT -cne 'ENVIRONMENT_ONLY_NO_ARGV') {
+            throw 'Fail-closed: vendor credentials may not be placed in a process argument list.'
+          }
+          function Assert-SignerOnlyAcl([string]$Path) {
+            $Acl = Get-Acl -LiteralPath $Path
+            $Rules = @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+            $Expected = @($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18') | Sort-Object
+            $Actual = @($Rules | ForEach-Object { [string]$_.IdentityReference.Value } | Sort-Object -Unique)
+            if (-not $Acl.AreAccessRulesProtected -or ($Actual -join '|') -cne ($Expected -join '|') -or
+                [string]$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cnotin $Expected -or
+                @($Rules | Where-Object { $_.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+                  (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl) }).Count -ne 0) {
+              throw 'Secret-bearing signer step found a non-exclusive vault ACL.'
+            }
+          }
+          function Get-InputTreeSha256([string]$Root) {
+            $RootItem = Get-Item -LiteralPath $Root -Force
+            $Entries = @(Get-ChildItem -LiteralPath $Root -Recurse -Force)
+            if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw 'Secret-bearing signer input contains a junction/reparse point.' }
+            if (@($Entries | Where-Object { $_.PSIsContainer -and @(Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force).Count -eq 0 }).Count -ne 0) {
+              throw 'Secret-bearing signer input contains an unbound empty directory.'
+            }
+            $Files = @($Entries | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)
+            if ($Files.Count -lt 2 -or $Files.Count -gt 20000) { throw 'Secret-bearing signer input file count is outside the strict bound.' }
+            [long]$Total = 0
+            $Rows = @($Files | ForEach-Object {
+              $Total += [long]$_.Length
+              $Relative = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/')
+              if ($Relative.StartsWith('../') -or $_.Length -gt 512MB -or $Total -gt 2GB) { throw 'Secret-bearing signer input path/size escaped its strict bound.' }
+              $FileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+              "$FileHash $($_.Length) $Relative"
+            })
+            $Text = ($Rows -join "`n") + "`n"
+            return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))).ToLowerInvariant()
+          }
+          $Vault = [IO.Path]::GetFullPath($env:AEGIS_VALIDATED_SIGNER_VAULT).TrimEnd('\')
+          $VaultPrefix = $Vault + '\'
+          foreach ($ExactPath in @($env:AEGIS_VALIDATED_UNSIGNED_INPUT, $env:AEGIS_VALIDATED_UNSIGNED_MANIFEST, $env:AEGIS_VALIDATED_SIGNED_OUTPUT)) {
+            if (-not [IO.Path]::GetFullPath($ExactPath).StartsWith($VaultPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Signer input, manifest, output, and receipt must remain inside the signer-only vault.'
+            }
+          }
+          foreach ($Entry in @((Get-Item -LiteralPath $Vault -Force); Get-ChildItem -LiteralPath $Vault -Recurse -Force)) {
+            if (($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Signer-only vault contains a junction/reparse point before secret use.' }
+            Assert-SignerOnlyAcl $Entry.FullName
+          }
+          if ((Get-InputTreeSha256 $env:AEGIS_VALIDATED_UNSIGNED_INPUT) -cne $env:INPUT_TREE_SHA256 -or
+              (Test-Path -LiteralPath $env:AEGIS_VALIDATED_SIGNED_OUTPUT)) { throw 'Signer-only vault input changed or output preexisted before secret use.' }
+          # Revalidate the orchestrator immediately before the only secret-bearing invocation.
+          $Orchestrator = [IO.Path]::GetFullPath($env:AEGIS_VALIDATED_SIGNER_ORCHESTRATOR)
+          $OrchestratorItem = Get-Item -LiteralPath $Orchestrator -Force
+          $OrchestratorVolume = [IO.Path]::GetPathRoot($Orchestrator)
+          $OrchestratorDrive = [IO.DriveInfo]::new($OrchestratorVolume)
+          if (($OrchestratorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+              -not $OrchestratorDrive.IsReady -or $OrchestratorDrive.DriveType -ne [IO.DriveType]::Fixed -or $OrchestratorDrive.DriveFormat -cne 'NTFS' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Orchestrator).Hash.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256) {
+            throw 'Trusted signer orchestrator changed before secret-bearing invocation.'
+          }
+          $CurrentAncestor = $OrchestratorItem
+          $BroadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545', 'S-1-5-32-546')
+          $DangerousRights = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Modify -bor
+            [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+            [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+          while ($CurrentAncestor) {
+            if (($CurrentAncestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Trusted signer orchestrator gained a reparse-point ancestor.' }
+            $AncestorAcl = Get-Acl -LiteralPath $CurrentAncestor.FullName
+            $AncestorRules = @($AncestorAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+            if (@($AncestorRules | Where-Object {
+              $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+              (([string]$_.IdentityReference.Value -cin $BroadSids) -or [string]$_.IdentityReference.Value -ceq $env:AEGIS_RELEASE_BUILD_ACCOUNT_SID) -and
+              (($_.FileSystemRights -band $DangerousRights) -ne 0)
+            }).Count -ne 0) { throw 'Trusted signer orchestrator ancestor ACL became build/broad writable.' }
+            if ($CurrentAncestor.FullName.TrimEnd('\').Equals($OrchestratorVolume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { break }
+            $CurrentAncestor = $CurrentAncestor.Parent
+          }
+          $OrchestratorLock = [IO.FileStream]::new($Orchestrator, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          try {
+            $ImmediateHasher = [Security.Cryptography.SHA256]::Create()
+            try {
+              $ImmediateHash = [Convert]::ToHexString($ImmediateHasher.ComputeHash($OrchestratorLock)).ToLowerInvariant()
+            } finally { $ImmediateHasher.Dispose() }
+            if ($ImmediateHash -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256) {
+              throw 'Locked trusted signer orchestrator hash changed immediately before secret-bearing invocation.'
+            }
+            $ImmediateSignature = Get-AuthenticodeSignature -LiteralPath $Orchestrator
+            if ($ImmediateSignature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $ImmediateSignature.SignerCertificate -or
+                $ImmediateSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT) {
+              throw 'Trusted signer orchestrator Authenticode identity changed immediately before secret-bearing invocation.'
+            }
+            $global:LASTEXITCODE = 0
+            & $Orchestrator `
+              -InputDirectory $env:AEGIS_VALIDATED_UNSIGNED_INPUT `
+              -InputManifest $env:AEGIS_VALIDATED_UNSIGNED_MANIFEST `
+              -OutputDirectory $env:AEGIS_VALIDATED_SIGNED_OUTPUT `
+              -ExpectedSourceCommit $env:SOURCE_COMMIT `
+              -ExpectedInputTreeSha256 $env:INPUT_TREE_SHA256 `
+              -ArchiveName $env:ARCHIVE_NAME `
+              -CredentialTransport 'ENVIRONMENT_ONLY_NO_ARGV'
+            if ($LASTEXITCODE -ne 0) { throw "Trusted signer orchestrator returned native exit code $LASTEXITCODE." }
+          } finally {
+            $OrchestratorLock.Dispose()
+            foreach ($Name in $SecretNames) { [Environment]::SetEnvironmentVariable($Name, $null, 'Process') }
+          }
+
+      - name: Verify signed output and cleanup receipt before any action download
+        id: signed_metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          function Get-TextSha256([string]$Text) {
+            return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))).ToLowerInvariant()
+          }
+          function Assert-SignerOnlyAcl([string]$Path) {
+            $Acl = Get-Acl -LiteralPath $Path
+            $Rules = @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+            $Expected = @($env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID, 'S-1-5-18') | Sort-Object
+            $Actual = @($Rules | ForEach-Object { [string]$_.IdentityReference.Value } | Sort-Object -Unique)
+            if (-not $Acl.AreAccessRulesProtected -or ($Actual -join '|') -cne ($Expected -join '|') -or
+                [string]$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cnotin $Expected -or
+                @($Rules | Where-Object { $_.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+                  (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl) }).Count -ne 0) {
+              throw 'Post-signing output/receipt is outside the exclusive signer-only ACL.'
+            }
+          }
+          function Get-CertificateInventorySha256 {
+            $Rows = [Collections.Generic.List[string]]::new()
+            foreach ($Store in @('My', 'Root', 'TrustedPeople')) {
+              foreach ($Certificate in @(Get-ChildItem -LiteralPath "Cert:\CurrentUser\$Store" | Sort-Object Thumbprint)) {
+                $Rows.Add("$Store`t$($Certificate.Thumbprint.ToLowerInvariant())`t$($Certificate.Subject)`t$($Certificate.Issuer)`t$([bool]$Certificate.HasPrivateKey)`t$($Certificate.NotBefore.ToUniversalTime().Ticks)`t$($Certificate.NotAfter.ToUniversalTime().Ticks)")
+              }
+            }
+            return Get-TextSha256 ((@($Rows | Sort-Object) -join "`n") + "`n")
+          }
+          function Get-CngProviderInventorySha256 {
+            $Roots = @(
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\Defaults\Provider',
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Cryptography\Defaults\Provider',
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\Providers',
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Cryptography\Providers',
+              'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Cryptography\Providers',
+              'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Cryptography\Providers'
+            )
+            $Rows = [Collections.Generic.List[string]]::new()
+            foreach ($Root in $Roots) {
+              if (-not (Test-Path -LiteralPath $Root)) { continue }
+              foreach ($Key in @((Get-Item -LiteralPath $Root); Get-ChildItem -LiteralPath $Root -Recurse) | Sort-Object Name) {
+                $RelativeKey = if ($Key.Name.Length -eq $Root.Replace('Registry::', '').Length) { '.' } else { $Key.Name.Substring($Root.Replace('Registry::', '').Length).TrimStart('\') }
+                $ValueNames = @($Key.GetValueNames() | Sort-Object)
+                if ($ValueNames.Count -eq 0) { $Rows.Add("$Root`t$RelativeKey`t<KEY>") }
+                foreach ($ValueName in $ValueNames) {
+                  $Kind = [string]$Key.GetValueKind($ValueName)
+                  $Value = $Key.GetValue($ValueName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                  $CanonicalValue = if ($Value -is [byte[]]) {
+                    [Convert]::ToHexString($Value).ToLowerInvariant()
+                  } elseif ($Value -is [string[]]) {
+                    @($Value | ForEach-Object { "$($_.Length):$_" }) -join '|'
+                  } else { [Convert]::ToString($Value, [Globalization.CultureInfo]::InvariantCulture) }
+                  $Rows.Add("$Root`t$RelativeKey`t$ValueName`t$Kind`t$CanonicalValue")
+                }
+              }
+            }
+            return Get-TextSha256 ((@($Rows | Sort-Object) -join "`n") + "`n")
+          }
+          function Get-PrivateKeyInventorySha256 {
+            $Roots = [ordered]@{
+              cng = (Join-Path $env:APPDATA 'Microsoft\Crypto\Keys')
+              rsa = (Join-Path $env:APPDATA "Microsoft\Crypto\RSA\$env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID")
+            }
+            $Rows = [Collections.Generic.List[string]]::new()
+            foreach ($Pair in $Roots.GetEnumerator()) {
+              if (-not (Test-Path -LiteralPath $Pair.Value)) { continue }
+              $RootItem = Get-Item -LiteralPath $Pair.Value -Force
+              $Files = @(Get-ChildItem -LiteralPath $Pair.Value -File -Force -Recurse)
+              if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                  @($Files | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+                throw 'Signer private-key inventory contains a reparse point.'
+              }
+              foreach ($File in $Files) {
+                $Relative = [IO.Path]::GetRelativePath($Pair.Value, $File.FullName).Replace('\', '/')
+                $Rows.Add("$($Pair.Key)`t$Relative`t$($File.Length)`t$((Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant())")
+              }
+            }
+            return Get-TextSha256 ((@($Rows | Sort-Object) -join "`n") + "`n")
+          }
+          function Get-SafeArchiveEvidence([string]$ArchivePath, [string]$ExtractionRoot) {
+            $ProductDirectory = 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64'
+            $Prefix = "$ProductDirectory/"
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $ArchiveItem = Get-Item -LiteralPath $ArchivePath -Force
+            if (($ArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $ArchiveItem.Length -lt 1KB -or $ArchiveItem.Length -gt 1GB) {
+              throw 'Signed ZIP file boundary is invalid.'
+            }
+            foreach ($StartPath in @($ArchiveItem.Directory.FullName, [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ExtractionRoot)))) {
+              $Ancestor = Get-Item -LiteralPath $StartPath -Force
+              while ($Ancestor) {
+                if (($Ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Signed ZIP archive/extraction path has a reparse-point ancestor.' }
+                $Ancestor = $Ancestor.Parent
+              }
+            }
+            $ArchiveShaBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchiveItem.FullName).Hash.ToLowerInvariant()
+            $Zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+            $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $PathNodes = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+            $Rows = [Collections.Generic.List[object]]::new()
+            [long]$ExpandedSize = 0
+            $FileCount = 0
+            try {
+              if ($Zip.Entries.Count -lt 2 -or $Zip.Entries.Count -gt 20000) { throw 'Signed ZIP entry count is outside the strict bound.' }
+              foreach ($Entry in $Zip.Entries) {
+                $OriginalName = $Entry.FullName
+                $Name = $OriginalName.Replace('\', '/')
+                $IsDirectory = $Name.EndsWith('/')
+                $PathText = if ($IsDirectory) { $Name.TrimEnd('/') } else { $Name }
+                $Segments = @($PathText.Split('/'))
+                if ([string]::IsNullOrWhiteSpace($Name) -or $OriginalName -cne $Name -or $Name.Length -gt 4096 -or $Name.StartsWith('/') -or $Name.Contains(':') -or $Name.Contains('//') -or
+                    $Name.IndexOfAny([char[]]@(0..31)) -ge 0 -or
+                    $Name -cne $Name.Normalize([Text.NormalizationForm]::FormC) -or
+                    (-not $Name.StartsWith($Prefix, [StringComparison]::Ordinal) -and $Name -cne $Prefix) -or
+                    @($Segments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -in @('.', '..') -or $_.Length -gt 255 -or $_.Trim() -cne $_ -or $_.TrimEnd(' ', '.') -cne $_ -or $_ -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$' }).Count -ne 0 -or
+                    -not $Seen.Add($Name.TrimEnd('/'))) { throw "Signed ZIP contains traversal, root-level, duplicate, case-colliding, or noncanonical entry: $Name" }
+                for ($NodeIndex = 0; $NodeIndex -lt $Segments.Count; $NodeIndex++) {
+                  $NodePath = @($Segments[0..$NodeIndex]) -join '/'
+                  $NodeKind = if ($NodeIndex -eq ($Segments.Count - 1) -and -not $IsDirectory) { 'file' } else { 'directory' }
+                  if ($PathNodes.ContainsKey($NodePath)) {
+                    $ExistingNode = $PathNodes[$NodePath]
+                    if ([string]$ExistingNode.path -cne $NodePath -or [string]$ExistingNode.type -cne $NodeKind) { throw "Signed ZIP has an implicit directory case collision or file/directory conflict: $NodePath" }
+                  } else { $PathNodes.Add($NodePath, [ordered]@{ path = $NodePath; type = $NodeKind }) }
+                }
+                $External = [uint32]([int64]$Entry.ExternalAttributes -band 0xffffffffL)
+                $UnixType = ($External -shr 16) -band 0xF000
+                if ($UnixType -eq 0xA000 -or $UnixType -notin @(0, 0x4000, 0x8000) -or
+                    ($IsDirectory -and $UnixType -notin @(0, 0x4000)) -or (-not $IsDirectory -and $UnixType -eq 0x4000) -or
+                    (($External -band 0xFFFF) -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Signed ZIP contains a symlink/reparse entry: $Name" }
+                if ($IsDirectory) {
+                  if ($Entry.Length -ne 0) { throw "Signed ZIP directory entry has content: $Name" }
+                  $Rows.Add([ordered]@{ path = $Name; type = 'directory'; size = 0; sha256 = '-' })
+                  continue
+                }
+                $ExpandedSize += [long]$Entry.Length
+                if ($Entry.Length -gt 512MB -or $ExpandedSize -gt 2GB) { throw 'Signed ZIP expanded-size bound was exceeded.' }
+                $Stream = $Entry.Open()
+                try { $Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Stream)).ToLowerInvariant() } finally { $Stream.Dispose() }
+                $Rows.Add([ordered]@{ path = $Name; type = 'file'; size = [long]$Entry.Length; sha256 = $Hash })
+                $FileCount++
+              }
+            } finally { $Zip.Dispose() }
+            if ($FileCount -lt 2 -or -not $PathNodes.ContainsKey($ProductDirectory) -or
+                [string]$PathNodes[$ProductDirectory].path -cne $ProductDirectory -or [string]$PathNodes[$ProductDirectory].type -cne 'directory' -or
+                (Test-Path -LiteralPath $ExtractionRoot)) { throw 'Signed ZIP lacks one exact product prefix or extraction root is not new.' }
+            Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ExtractionRoot
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant() -cne $ArchiveShaBefore) { throw 'Signed ZIP changed during strict validation/extraction.' }
+            $Extracted = @((Get-Item -LiteralPath $ExtractionRoot -Force); Get-ChildItem -LiteralPath $ExtractionRoot -Recurse -Force)
+            if (@($Extracted | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw 'Signed ZIP extraction root contains a reparse point.' }
+            $RootChildren = @(Get-ChildItem -LiteralPath $ExtractionRoot -Force)
+            if ($RootChildren.Count -ne 1 -or -not $RootChildren[0].PSIsContainer -or $RootChildren[0].Name -cne $ProductDirectory) {
+              throw 'Signed ZIP extraction has a root-level extra file or non-exact product directory.'
+            }
+            $ExpectedExtractedNodes = @($PathNodes.Values | Sort-Object path)
+            $ActualExtractedNodes = @((Get-Item -LiteralPath $RootChildren[0].FullName -Force); Get-ChildItem -LiteralPath $RootChildren[0].FullName -Recurse -Force) | ForEach-Object {
+              [ordered]@{ path = [IO.Path]::GetRelativePath($ExtractionRoot, $_.FullName).Replace('\', '/'); type = if ($_.PSIsContainer) { 'directory' } else { 'file' } }
+            } | Sort-Object path
+            if ($ActualExtractedNodes.Count -ne $ExpectedExtractedNodes.Count) { throw 'Signed ZIP full extraction node count differs from its derived inventory.' }
+            for ($NodeIndex = 0; $NodeIndex -lt $ExpectedExtractedNodes.Count; $NodeIndex++) {
+              if ([string]$ActualExtractedNodes[$NodeIndex].path -cne [string]$ExpectedExtractedNodes[$NodeIndex].path -or
+                  [string]$ActualExtractedNodes[$NodeIndex].type -cne [string]$ExpectedExtractedNodes[$NodeIndex].type) {
+                throw "Signed ZIP full extraction node inventory drifted: $([string]$ActualExtractedNodes[$NodeIndex].path)"
+              }
+            }
+            $ExpectedFiles = @($Rows | Where-Object type -ceq 'file' | Sort-Object path)
+            $ActualFiles = @(Get-ChildItem -LiteralPath $ExtractionRoot -File -Recurse -Force | Sort-Object FullName)
+            if ($ActualFiles.Count -ne $ExpectedFiles.Count) { throw 'Signed ZIP extraction file count differs from full entry inventory.' }
+            for ($Index = 0; $Index -lt $ExpectedFiles.Count; $Index++) {
+              $Relative = [IO.Path]::GetRelativePath($ExtractionRoot, $ActualFiles[$Index].FullName).Replace('\', '/')
+              if ($Relative -cne [string]$ExpectedFiles[$Index].path -or $ActualFiles[$Index].Length -ne [long]$ExpectedFiles[$Index].size -or
+                  (Get-FileHash -Algorithm SHA256 -LiteralPath $ActualFiles[$Index].FullName).Hash.ToLowerInvariant() -cne [string]$ExpectedFiles[$Index].sha256) {
+                throw "Signed ZIP extracted inventory drifted: $Relative"
+              }
+            }
+            $InventoryText = (@($Rows | Sort-Object path | ForEach-Object { "$($_.type)`t$($_.size)`t$($_.sha256)`t$($_.path)" }) -join "`n") + "`n"
+            return [pscustomobject]@{
+              productRoot = $RootChildren[0].FullName
+              entryCount = $Rows.Count
+              fileCount = $FileCount
+              expandedSize = $ExpandedSize
+              inventorySha256 = Get-TextSha256 $InventoryText
+            }
+          }
+          $OutputRoot = [IO.Path]::GetFullPath($env:AEGIS_VALIDATED_SIGNED_OUTPUT)
+          $VaultRoot = [IO.Path]::GetFullPath($env:AEGIS_VALIDATED_SIGNER_VAULT).TrimEnd('\')
+          if (-not $OutputRoot.StartsWith($VaultRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Signer output/receipt escaped the signer-only vault.'
+          }
+          $Archive = Join-Path $OutputRoot $env:ARCHIVE_NAME
+          $Checksum = "$Archive.sha256"
+          $ReceiptPath = Join-Path $OutputRoot 'trusted-signing-receipt.json'
+          $Names = @(Get-ChildItem -LiteralPath $OutputRoot -File -Force | ForEach-Object Name | Sort-Object)
+          $ExpectedNames = @($env:ARCHIVE_NAME, "$env:ARCHIVE_NAME.sha256", 'trusted-signing-receipt.json') | Sort-Object
+          $OutputEntries = @((Get-Item -LiteralPath $OutputRoot -Force)) + @(Get-ChildItem -LiteralPath $OutputRoot -Force)
+          if (($Names -join '|') -cne ($ExpectedNames -join '|') -or @(Get-ChildItem -LiteralPath $OutputRoot -Directory -Force).Count -ne 0 -or
+              @($OutputEntries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+            throw 'Trusted signer output inventory is not exact or contains a reparse point.'
+          }
+          foreach ($Entry in @((Get-Item -LiteralPath $VaultRoot -Force); Get-ChildItem -LiteralPath $VaultRoot -Recurse -Force)) {
+            if (($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Signer-only vault contains a post-signing reparse point.' }
+            Assert-SignerOnlyAcl $Entry.FullName
+          }
+          $PostOrchestrator = [IO.Path]::GetFullPath($env:AEGIS_VALIDATED_SIGNER_ORCHESTRATOR)
+          $PostOrchestratorSignature = Get-AuthenticodeSignature -LiteralPath $PostOrchestrator
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $PostOrchestrator).Hash.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256 -or
+              $PostOrchestratorSignature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $PostOrchestratorSignature.SignerCertificate -or
+              $PostOrchestratorSignature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT) {
+            throw 'Trusted signer orchestrator changed during the secret-bearing operation.'
+          }
+          $Receipt = Get-Content -Raw -LiteralPath $ReceiptPath | ConvertFrom-Json
+          $Keys = @($Receipt.PSObject.Properties.Name | Sort-Object)
+          $ExpectedKeys = @(
+            'allPeSignaturesValid','archiveEntryCount','archiveEntryInventorySha256','archiveExpandedSize','archiveFileCount',
+            'archiveName','archiveSha256','certificateStoreAfterSha256','certificateStoreBaselineRestored','certificateStoreBeforeSha256',
+            'checksumSha256','ckaStateRemoved','cngProviderAfterSha256','cngProviderBaselineRestored','cngProviderBeforeSha256',
+            'credentialTransport','credentialsPassedInArgv','deleteKeyAttempted','deleteKeySucceeded','exactOneSignaturePerPe',
+            'githubRunAttempt','githubRunId','inputTreeSha256','keyContainerName','keyProvider','keyUniqueName','machineGuidSha256',
+            'orchestratorSha256','orchestratorSignerThumbprint','peFileCount','privateKeyAfterSha256','privateKeyBaselineRestored',
+            'privateKeyBeforeSha256','repositoryCodeExecuted','rfc3161Only','schemaVersion','sha256Only','signerAccountSid',
+            'signerRunnerName','signerSimpleName','signerThumbprint','sourceCommit'
+          ) | Sort-Object
+          if (($Keys -join '|') -cne ($ExpectedKeys -join '|') -or $Receipt.schemaVersion -ne 2 -or
+              $Receipt.sourceCommit -cne $env:SOURCE_COMMIT -or $Receipt.inputTreeSha256 -cne $env:INPUT_TREE_SHA256 -or
+              [string]$Receipt.githubRunId -cne [string]$env:GITHUB_RUN_ID -or [string]$Receipt.githubRunAttempt -cne [string]$env:GITHUB_RUN_ATTEMPT -or
+              $Receipt.machineGuidSha256 -cne $env:AEGIS_SIGNER_MACHINE_GUID_SHA256 -or
+              $Receipt.signerAccountSid -cne $env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID -or
+              $Receipt.signerRunnerName -cne $env:AEGIS_RELEASE_SIGNER_RUNNER_NAME -or
+              $Receipt.orchestratorSha256 -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SHA256 -or
+              $Receipt.orchestratorSignerThumbprint -cne $env:AEGIS_TRUSTED_SIGNER_ORCHESTRATOR_SIGNER_THUMBPRINT -or
+              $Receipt.archiveName -cne $env:ARCHIVE_NAME -or $Receipt.archiveSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $Receipt.checksumSha256 -cnotmatch '^[0-9a-f]{64}$' -or $Receipt.signerThumbprint -cnotmatch '^[0-9a-f]{40}$' -or
+              $Receipt.signerSimpleName -cnotin @('LAI ZEYU', '来泽宇') -or [int]$Receipt.peFileCount -lt 2 -or
+              [int]$Receipt.archiveEntryCount -lt 3 -or [int]$Receipt.archiveEntryCount -gt 20000 -or
+              [int]$Receipt.archiveFileCount -lt 2 -or [long]$Receipt.archiveExpandedSize -lt 1 -or [long]$Receipt.archiveExpandedSize -gt 2GB -or
+              $Receipt.archiveEntryInventorySha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              [string]::IsNullOrWhiteSpace([string]$Receipt.keyProvider) -or [string]$Receipt.keyProvider -match '[\r\n]' -or
+              [string]::IsNullOrWhiteSpace([string]$Receipt.keyContainerName) -or [string]$Receipt.keyContainerName -match '[\r\n\\/]' -or
+              [string]::IsNullOrWhiteSpace([string]$Receipt.keyUniqueName) -or [IO.Path]::GetFileName([string]$Receipt.keyUniqueName) -cne [string]$Receipt.keyUniqueName -or
+              -not $Receipt.allPeSignaturesValid -or -not $Receipt.sha256Only -or -not $Receipt.rfc3161Only -or
+              -not $Receipt.exactOneSignaturePerPe -or $Receipt.credentialTransport -cne 'ENVIRONMENT_ONLY_NO_ARGV' -or
+              $Receipt.credentialsPassedInArgv -or $Receipt.repositoryCodeExecuted -or -not $Receipt.ckaStateRemoved -or
+              -not $Receipt.certificateStoreBaselineRestored -or -not $Receipt.cngProviderBaselineRestored -or
+              -not $Receipt.privateKeyBaselineRestored -or -not $Receipt.deleteKeyAttempted -or -not $Receipt.deleteKeySucceeded) {
+            throw 'Trusted signer receipt does not prove the no-checkout/no-argv signing and complete CKA/provider/key cleanup contract.'
+          }
+          foreach ($HashField in @(
+            'certificateStoreBeforeSha256','certificateStoreAfterSha256','cngProviderBeforeSha256','cngProviderAfterSha256',
+            'privateKeyBeforeSha256','privateKeyAfterSha256'
+          )) { if ([string]$Receipt.$HashField -cnotmatch '^[0-9a-f]{64}$') { throw "Trusted signer receipt has malformed $HashField." } }
+          if ($Receipt.certificateStoreBeforeSha256 -cne $Receipt.certificateStoreAfterSha256 -or
+              $Receipt.cngProviderBeforeSha256 -cne $Receipt.cngProviderAfterSha256 -or
+              $Receipt.privateKeyBeforeSha256 -cne $Receipt.privateKeyAfterSha256 -or
+              (Get-CertificateInventorySha256) -cne $Receipt.certificateStoreAfterSha256 -or
+              (Get-CngProviderInventorySha256) -cne $Receipt.cngProviderAfterSha256 -or
+              (Get-PrivateKeyInventorySha256) -cne $Receipt.privateKeyAfterSha256) {
+            throw 'Independent post-signing certificate/CNG/private-key inventory does not match the exact restored baselines.'
+          }
+          $ProviderRegistrations = @(
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\Defaults\Provider',
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Cryptography\Defaults\Provider',
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\Providers',
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Cryptography\Providers',
+            'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Cryptography\Providers',
+            'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Cryptography\Providers'
+          ) | ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -ErrorAction SilentlyContinue } | Where-Object { $_.PSChildName -ceq [string]$Receipt.keyProvider }
+          if ($ProviderRegistrations.Count -ge 1) {
+            try {
+              $ReceiptProvider = [Security.Cryptography.CngProvider]::new([string]$Receipt.keyProvider)
+              if ([Security.Cryptography.CngKey]::Exists([string]$Receipt.keyContainerName, $ReceiptProvider, [Security.Cryptography.CngKeyOpenOptions]::UserKey)) {
+                throw 'Exact signer key container remains after claimed DeleteKey success.'
+              }
+            } catch {
+              throw "Independent exact signer CNG key-container absence check failed: $($_.Exception.Message)"
+            }
+          }
+          foreach ($KeyRoot in @((Join-Path $env:APPDATA 'Microsoft\Crypto\Keys'), (Join-Path $env:APPDATA "Microsoft\Crypto\RSA\$env:AEGIS_RELEASE_SIGNER_ACCOUNT_SID"))) {
+            if (Test-Path -LiteralPath (Join-Path $KeyRoot ([string]$Receipt.keyUniqueName))) { throw 'Exact signer key unique-name file remains after cleanup.' }
+          }
+          $ArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          $ChecksumHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Checksum).Hash.ToLowerInvariant()
+          if ($ArchiveHash -cne $Receipt.archiveSha256 -or $ChecksumHash -cne $Receipt.checksumSha256 -or
+              (Get-Content -Raw -LiteralPath $Checksum).Trim() -cne "$ArchiveHash  $env:ARCHIVE_NAME") { throw 'Signed archive/checksum bytes differ from the cleanup receipt.' }
+          $Expanded = Join-Path $env:RUNNER_TEMP ("aegis-signer-verify-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+          try {
+            $ArchiveEvidence = Get-SafeArchiveEvidence -ArchivePath $Archive -ExtractionRoot $Expanded
+            if ([int]$ArchiveEvidence.entryCount -ne [int]$Receipt.archiveEntryCount -or
+                [int]$ArchiveEvidence.fileCount -ne [int]$Receipt.archiveFileCount -or
+                [long]$ArchiveEvidence.expandedSize -ne [long]$Receipt.archiveExpandedSize -or
+                [string]$ArchiveEvidence.inventorySha256 -cne [string]$Receipt.archiveEntryInventorySha256) {
+              throw 'Signed archive full safe-entry inventory differs from the trusted signer receipt.'
+            }
+            $Entries = @(Get-ChildItem -LiteralPath $ArchiveEvidence.productRoot -Recurse -Force)
+            $Pes = @($Entries | Where-Object {
+              if ($_.PSIsContainer -or $_.Length -lt 2) { return $false }
+              $Stream = [IO.File]::OpenRead($_.FullName)
+              try { return ($Stream.ReadByte() -eq 0x4D -and $Stream.ReadByte() -eq 0x5A) } finally { $Stream.Dispose() }
+            })
+            if ($Pes.Count -ne [int]$Receipt.peFileCount) { throw 'Signed archive PE inventory differs from the trusted receipt.' }
+            foreach ($Pe in $Pes) {
+              $Signature = Get-AuthenticodeSignature -LiteralPath $Pe.FullName
+              $SimpleName = if ($Signature.SignerCertificate) { $Signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { '' }
+              if ($Signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $Signature.SignerCertificate -or -not $Signature.TimeStamperCertificate -or
+                  $Signature.SignerCertificate.Thumbprint.ToLowerInvariant() -cne $Receipt.signerThumbprint -or $SimpleName -cne $Receipt.signerSimpleName) { throw "Signed PE failed the built-in WinTrust signer/timestamp check: $($Pe.Name)" }
+            }
+          } finally { if (Test-Path -LiteralPath $Expanded) { Remove-Item -LiteralPath $Expanded -Recurse -Force } }
+          $Residual = @(
+            foreach ($Store in @('My', 'Root', 'TrustedPeople')) {
+              Get-ChildItem -LiteralPath "Cert:\CurrentUser\$Store" | Where-Object { $_.Thumbprint.ToLowerInvariant() -ceq $Receipt.signerThumbprint }
+            }
+          )
+          if ($Residual.Count -ne 0 -or (Test-Path -LiteralPath (Join-Path $env:APPDATA 'eSignerCKA'))) { throw 'Signer certificate or CKA state remains after the trusted orchestrator cleanup.' }
+          $PublicInput = Join-Path $env:RUNNER_TEMP "aegis-signed-public-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $PublicInput) { throw 'Signed public staging must not preexist.' }
+          New-Item -ItemType Directory -Path $PublicInput | Out-Null
+          Copy-Item -LiteralPath $Archive, $Checksum -Destination $PublicInput
+          "AEGIS_SIGNED_PUBLIC_INPUT=$PublicInput" >> $env:GITHUB_ENV
+          "archive_name=$env:ARCHIVE_NAME" >> $env:GITHUB_OUTPUT
+          "archive_sha256=$ArchiveHash" >> $env:GITHUB_OUTPUT
+          "checksum_sha256=$ChecksumHash" >> $env:GITHUB_OUTPUT
+          "signer_thumbprint=$($Receipt.signerThumbprint)" >> $env:GITHUB_OUTPUT
+          "archive_entry_count=$($Receipt.archiveEntryCount)" >> $env:GITHUB_OUTPUT
+          "archive_file_count=$($Receipt.archiveFileCount)" >> $env:GITHUB_OUTPUT
+          "archive_expanded_size=$($Receipt.archiveExpandedSize)" >> $env:GITHUB_OUTPUT
+          "archive_inventory_sha256=$($Receipt.archiveEntryInventorySha256)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload only signed bytes after signer-state cleanup
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-signed-public-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Remove the exact private build-to-signer handoff and signed staging
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Set-StrictMode -Version Latest
+          $Errors = [Collections.Generic.List[string]]::new()
+          try {
+            if ($env:HANDOFF_LEAF -cnotmatch '^aegis-github-1\.5\.0-\d+-\d+-[0-9a-f]{12}$') { throw 'Handoff leaf is invalid.' }
+            $Root = [IO.Path]::GetFullPath($env:AEGIS_PRIVATE_SIGNING_HANDOFF_ROOT).TrimEnd('\')
+            $IngressRoot = [IO.Path]::GetFullPath((Join-Path $Root 'ingress')).TrimEnd('\')
+            $VaultRoot = [IO.Path]::GetFullPath((Join-Path $Root 'signer-vault')).TrimEnd('\')
+            $Targets = @(
+              [IO.Path]::GetFullPath((Join-Path $IngressRoot $env:HANDOFF_LEAF)),
+              [IO.Path]::GetFullPath((Join-Path $VaultRoot $env:HANDOFF_LEAF)),
+              [IO.Path]::GetFullPath((Join-Path $VaultRoot "$env:HANDOFF_LEAF.claiming"))
+            )
+            foreach ($Target in $Targets) {
+              $ExpectedParent = if ([IO.Path]::GetFileName($Target) -ceq "$env:HANDOFF_LEAF.claiming") { $VaultRoot } elseif ($Target.StartsWith($IngressRoot + '\')) { $IngressRoot } else { $VaultRoot }
+              if (-not $Target.StartsWith($ExpectedParent + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                  [IO.Path]::GetDirectoryName($Target).TrimEnd('\') -cne $ExpectedParent) { throw 'Private ingress/vault cleanup escaped.' }
+              if (Test-Path -LiteralPath $Target) {
+                $Entries = @((Get-Item -LiteralPath $Target -Force); Get-ChildItem -LiteralPath $Target -Recurse -Force)
+                if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw 'Private ingress/vault cleanup tree has a reparse point.' }
+                Remove-Item -LiteralPath $Target -Recurse -Force
+              }
+              if (Test-Path -LiteralPath $Target) { throw 'Private ingress/vault handoff remained.' }
+            }
+          } catch { $Errors.Add("private handoff: $($_.Exception.Message)") }
+          try {
+            if ($env:AEGIS_SIGNED_PUBLIC_INPUT -and (Test-Path -LiteralPath $env:AEGIS_SIGNED_PUBLIC_INPUT)) {
+              $Exact = [IO.Path]::GetFullPath($env:AEGIS_SIGNED_PUBLIC_INPUT)
+              $Prefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+              if (-not $Exact.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($Exact) -cne "aegis-signed-public-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") { throw 'Signed staging cleanup escaped RUNNER_TEMP.' }
+              Remove-Item -LiteralPath $Exact -Recurse -Force
+            }
+          } catch { $Errors.Add("signed staging: $($_.Exception.Message)") }
+          if ($Errors.Count -ne 0) { throw "Signer cleanup failed: $($Errors -join ' | ')" }
+
+  verify-signed:
+    name: Verify signed artifact and run two unchanged-byte lifecycle passes
+    needs: [build-private-unsigned, sign-private-no-checkout]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
+      github.repository_owner == 'lzy2767865503-pixel' &&
+      github.actor == 'lzy2767865503-pixel' &&
+      github.triggering_actor == 'lzy2767865503-pixel' &&
+      github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.release_metadata.outputs.source_commit }}
+      archive_name: ${{ steps.release_metadata.outputs.archive_name }}
+      archive_sha256: ${{ steps.release_metadata.outputs.archive_sha256 }}
+      checksum_sha256: ${{ steps.release_metadata.outputs.checksum_sha256 }}
+      signer_thumbprint: ${{ steps.release_metadata.outputs.signer_thumbprint }}
+      archive_entry_count: ${{ steps.release_metadata.outputs.archive_entry_count }}
+      archive_file_count: ${{ steps.release_metadata.outputs.archive_file_count }}
+      archive_expanded_size: ${{ steps.release_metadata.outputs.archive_expanded_size }}
+      archive_inventory_sha256: ${{ steps.release_metadata.outputs.archive_inventory_sha256 }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_COMMIT: ${{ needs.build-private-unsigned.outputs.source_commit }}
+      ARCHIVE_NAME: ${{ needs.sign-private-no-checkout.outputs.archive_name }}
+      EXPECTED_ARCHIVE_SHA256: ${{ needs.sign-private-no-checkout.outputs.archive_sha256 }}
+      EXPECTED_CHECKSUM_SHA256: ${{ needs.sign-private-no-checkout.outputs.checksum_sha256 }}
+      EXPECTED_SIGNER_THUMBPRINT: ${{ needs.sign-private-no-checkout.outputs.signer_thumbprint }}
+      EXPECTED_ARCHIVE_ENTRY_COUNT: ${{ needs.sign-private-no-checkout.outputs.archive_entry_count }}
+      EXPECTED_ARCHIVE_FILE_COUNT: ${{ needs.sign-private-no-checkout.outputs.archive_file_count }}
+      EXPECTED_ARCHIVE_EXPANDED_SIZE: ${{ needs.sign-private-no-checkout.outputs.archive_expanded_size }}
+      EXPECTED_ARCHIVE_INVENTORY_SHA256: ${{ needs.sign-private-no-checkout.outputs.archive_inventory_sha256 }}
+      AEGIS_TAG_RULESET_ID: "21631608"
+      AEGIS_MAIN_RULESET_ID: "21633557"
+    steps:
+      - name: Check out only the exact immutable tag after all signer secrets are gone
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+      - name: Download the signed same-run artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aegis-signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/github-release
+      - name: Revalidate rulesets, exact source/tag, signatures, and frozen hashes
+        id: release_metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-StrictMode -Version Latest
+          if ($env:RELEASE_TAG -cne 'windows-v1.5.0' -or $env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:ARCHIVE_NAME -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64.zip' -or
+              $env:EXPECTED_ARCHIVE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or $env:EXPECTED_CHECKSUM_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $env:EXPECTED_SIGNER_THUMBPRINT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:EXPECTED_ARCHIVE_ENTRY_COUNT -cnotmatch '^\d{1,5}$' -or $env:EXPECTED_ARCHIVE_FILE_COUNT -cnotmatch '^\d{1,5}$' -or
+              $env:EXPECTED_ARCHIVE_EXPANDED_SIZE -cnotmatch '^\d{1,10}$' -or $env:EXPECTED_ARCHIVE_INVENTORY_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'Signed verifier inputs are malformed.'
+          }
+          $Ruleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$env:AEGIS_MAIN_RULESET_ID" | ConvertFrom-Json
+          $Types = @($Ruleset.rules | ForEach-Object type | Sort-Object)
+          $Pull = @($Ruleset.rules | Where-Object type -ceq 'pull_request')
+          $Status = @($Ruleset.rules | Where-Object type -ceq 'required_status_checks')
+          if ($LASTEXITCODE -ne 0 -or [long]$Ruleset.id -ne 21633557 -or $Ruleset.enforcement -cne 'active' -or
+              $Ruleset.target -cne 'branch' -or @($Ruleset.bypass_actors).Count -ne 0 -or
+              (@($Ruleset.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or @($Ruleset.conditions.ref_name.exclude).Count -ne 0 -or
+              ($Types -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks' -or
+              $Pull.Count -ne 1 -or $Status.Count -ne 1) { throw 'Exact no-bypass protected-main ruleset drifted.' }
+          $PullParameters = $Pull[0].parameters
+          $PullKeys = @($PullParameters.PSObject.Properties.Name | Sort-Object)
+          $ExpectedPullKeys = @('allowed_merge_methods', 'dismiss_stale_reviews_on_push', 'require_code_owner_review', 'require_extra_approval_for_unattributed_changes', 'require_last_push_approval', 'required_approving_review_count', 'required_review_thread_resolution', 'required_reviewers') | Sort-Object
+          if (($PullKeys -join '|') -cne ($ExpectedPullKeys -join '|') -or
+              (@($PullParameters.allowed_merge_methods | Sort-Object) -join '|') -cne 'merge|rebase|squash' -or
+              -not $PullParameters.dismiss_stale_reviews_on_push -or -not $PullParameters.required_review_thread_resolution -or
+              $PullParameters.require_code_owner_review -or $PullParameters.require_extra_approval_for_unattributed_changes -or
+              $PullParameters.require_last_push_approval -or [int]$PullParameters.required_approving_review_count -ne 0 -or
+              @($PullParameters.required_reviewers).Count -ne 0) { throw 'Exact protected-main pull-request policy drifted.' }
+          $StatusParameters = $Status[0].parameters
+          $StatusKeys = @($StatusParameters.PSObject.Properties.Name | Sort-Object)
+          $ExpectedStatusKeys = @('do_not_enforce_on_create', 'required_status_checks', 'strict_required_status_checks_policy') | Sort-Object
+          $Checks = @($StatusParameters.required_status_checks)
+          $Contexts = @($Checks | ForEach-Object { [string]$_.context } | Sort-Object)
+          if (($StatusKeys -join '|') -cne ($ExpectedStatusKeys -join '|') -or
+              -not $StatusParameters.strict_required_status_checks_policy -or $StatusParameters.do_not_enforce_on_create -or
+              $Checks.Count -ne 2 -or ($Contexts -join '|') -cne 'verify (3.10)|verify (3.12)' -or
+              @($Checks | Where-Object { [long]$_.integration_id -ne 15368 }).Count -ne 0 -or
+              @($Checks | Where-Object { (@($_.PSObject.Properties.Name | Sort-Object) -join '|') -cne 'context|integration_id' }).Count -ne 0) {
+            throw 'Exact strict GitHub Actions required-status-check policy drifted.'
+          }
+          $TagRuleset = & gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$env:AEGIS_TAG_RULESET_ID" | ConvertFrom-Json
+          $TagTypes = @($TagRuleset.rules | ForEach-Object type | Sort-Object)
+          if ($LASTEXITCODE -ne 0 -or [long]$TagRuleset.id -ne 21631608 -or $TagRuleset.enforcement -cne 'active' -or
+              $TagRuleset.target -cne 'tag' -or @($TagRuleset.bypass_actors).Count -ne 0 -or
+              (@($TagRuleset.conditions.ref_name.include) -join '|') -cne 'refs/tags/windows-v*' -or
+              @($TagRuleset.conditions.ref_name.exclude).Count -ne 0 -or ($TagTypes -join '|') -cne 'deletion|update') { throw 'Exact tag ruleset drifted.' }
+          & git fetch --force origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)"
+          & git fetch --force origin 'refs/heads/main:refs/remotes/origin/main'
+          $Head = (& git rev-parse HEAD).Trim().ToLowerInvariant()
+          $Tag = (& git rev-parse "$($env:RELEASE_TAG)^{}").Trim().ToLowerInvariant()
+          $Main = (& git rev-parse refs/remotes/origin/main).Trim().ToLowerInvariant()
+          if ($Head -cne $env:SOURCE_COMMIT -or $Tag -cne $env:SOURCE_COMMIT -or $Main -cne $env:SOURCE_COMMIT) { throw 'Signed artifact source is not the exact immutable tag/current protected main.' }
+          $ReleaseRoot = (Resolve-Path -LiteralPath artifacts/github-release).Path
+          $Archive = Join-Path $ReleaseRoot $env:ARCHIVE_NAME
+          $Checksum = "$Archive.sha256"
+          $Files = @(Get-ChildItem -LiteralPath $ReleaseRoot -File -Force)
+          if ($Files.Count -ne 2 -or @(Get-ChildItem -LiteralPath $ReleaseRoot -Directory -Force).Count -ne 0 -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant() -cne $env:EXPECTED_ARCHIVE_SHA256 -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Checksum).Hash.ToLowerInvariant() -cne $env:EXPECTED_CHECKSUM_SHA256 -or
+              (Get-Content -Raw -LiteralPath $Checksum).Trim() -cne "$env:EXPECTED_ARCHIVE_SHA256  $env:ARCHIVE_NAME") { throw 'Signed artifact bytes are not exact.' }
+          $Expanded = Join-Path $env:RUNNER_TEMP ("aegis-verify-" + [Guid]::NewGuid().ToString('N'))
+          try {
+            $ArchiveEvidence = ./scripts/windows/verify-portable-archive.ps1 -ArchivePath $Archive -DestinationPath $Expanded
+            if ([int]$ArchiveEvidence.entryCount -ne [int]$env:EXPECTED_ARCHIVE_ENTRY_COUNT -or
+                [int]$ArchiveEvidence.fileCount -ne [int]$env:EXPECTED_ARCHIVE_FILE_COUNT -or
+                [long]$ArchiveEvidence.expandedSize -ne [long]$env:EXPECTED_ARCHIVE_EXPANDED_SIZE -or
+                [string]$ArchiveEvidence.inventorySha256 -cne $env:EXPECTED_ARCHIVE_INVENTORY_SHA256) {
+              throw 'Signed ZIP full safe-entry inventory differs from the signer-only receipt lineage.'
+            }
+            ./scripts/windows/verify-github-signatures.ps1 -Root $ArchiveEvidence.productRoot -ExpectedThumbprint $env:EXPECTED_SIGNER_THUMBPRINT
+          } finally { if (Test-Path -LiteralPath $Expanded) { Remove-Item -LiteralPath $Expanded -Recurse -Force } }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $Probe = @(& gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" 2>&1)
+          $ProbeExit = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($ProbeExit -eq 0 -or ($Probe -join "`n") -notmatch '(?i)\bHTTP\s+404\b') { throw 'Release slot is not provably empty after signed verification.' }
+          "source_commit=$env:SOURCE_COMMIT" >> $env:GITHUB_OUTPUT
+          "archive_name=$env:ARCHIVE_NAME" >> $env:GITHUB_OUTPUT
+          "archive_sha256=$env:EXPECTED_ARCHIVE_SHA256" >> $env:GITHUB_OUTPUT
+          "checksum_sha256=$env:EXPECTED_CHECKSUM_SHA256" >> $env:GITHUB_OUTPUT
+          "signer_thumbprint=$env:EXPECTED_SIGNER_THUMBPRINT" >> $env:GITHUB_OUTPUT
+          "archive_entry_count=$env:EXPECTED_ARCHIVE_ENTRY_COUNT" >> $env:GITHUB_OUTPUT
+          "archive_file_count=$env:EXPECTED_ARCHIVE_FILE_COUNT" >> $env:GITHUB_OUTPUT
+          "archive_expanded_size=$env:EXPECTED_ARCHIVE_EXPANDED_SIZE" >> $env:GITHUB_OUTPUT
+          "archive_inventory_sha256=$env:EXPECTED_ARCHIVE_INVENTORY_SHA256" >> $env:GITHUB_OUTPUT
+      - name: Signed same-byte portable lifecycle round 1
+        timeout-minutes: 40
+        shell: pwsh
+        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 1
+      - name: Signed same-byte portable lifecycle round 2
+        timeout-minutes: 40
+        shell: pwsh
+        run: ./scripts/windows/verify-github-portable-lifecycle.ps1 -ArchivePath "artifacts/github-release/$env:ARCHIVE_NAME" -QaRound 2
+      - name: Confirm signed bytes remained frozen after both lifecycle passes
+        shell: pwsh
+        run: |
+          $Archive = "artifacts/github-release/$env:ARCHIVE_NAME"
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant() -cne $env:EXPECTED_ARCHIVE_SHA256 -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath "$Archive.sha256").Hash.ToLowerInvariant() -cne $env:EXPECTED_CHECKSUM_SHA256) { throw 'Signed bytes changed during two-pass lifecycle QA.' }
+
   publish-release:
     name: Isolated no-checkout exact-ID publisher with rollback
-    needs: sign-and-test
+    needs: verify-signed
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'lzy2767865503-pixel/aegis-forecast' &&
@@ -299,11 +1190,15 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
-      SOURCE_COMMIT: ${{ needs.sign-and-test.outputs.source_commit }}
-      EXPECTED_ARCHIVE_NAME: ${{ needs.sign-and-test.outputs.archive_name }}
-      EXPECTED_ARCHIVE_SHA256: ${{ needs.sign-and-test.outputs.archive_sha256 }}
-      EXPECTED_CHECKSUM_SHA256: ${{ needs.sign-and-test.outputs.checksum_sha256 }}
-      EXPECTED_SIGNER_THUMBPRINT: ${{ needs.sign-and-test.outputs.signer_thumbprint }}
+      SOURCE_COMMIT: ${{ needs.verify-signed.outputs.source_commit }}
+      EXPECTED_ARCHIVE_NAME: ${{ needs.verify-signed.outputs.archive_name }}
+      EXPECTED_ARCHIVE_SHA256: ${{ needs.verify-signed.outputs.archive_sha256 }}
+      EXPECTED_CHECKSUM_SHA256: ${{ needs.verify-signed.outputs.checksum_sha256 }}
+      EXPECTED_SIGNER_THUMBPRINT: ${{ needs.verify-signed.outputs.signer_thumbprint }}
+      EXPECTED_ARCHIVE_ENTRY_COUNT: ${{ needs.verify-signed.outputs.archive_entry_count }}
+      EXPECTED_ARCHIVE_FILE_COUNT: ${{ needs.verify-signed.outputs.archive_file_count }}
+      EXPECTED_ARCHIVE_EXPANDED_SIZE: ${{ needs.verify-signed.outputs.archive_expanded_size }}
+      EXPECTED_ARCHIVE_INVENTORY_SHA256: ${{ needs.verify-signed.outputs.archive_inventory_sha256 }}
       RELEASE_OWNERSHIP_MARKER: '<!-- aegis-publisher:${{ github.run_id }}:${{ github.run_attempt }} -->'
       AEGIS_TAG_RULESET_ID: "21631608"
       AEGIS_MAIN_RULESET_ID: "21633557"
@@ -328,6 +1223,8 @@ jobs:
               $env:EXPECTED_ARCHIVE_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
               $env:EXPECTED_CHECKSUM_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
               $env:EXPECTED_SIGNER_THUMBPRINT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:EXPECTED_ARCHIVE_ENTRY_COUNT -cnotmatch '^\d{1,5}$' -or $env:EXPECTED_ARCHIVE_FILE_COUNT -cnotmatch '^\d{1,5}$' -or
+              $env:EXPECTED_ARCHIVE_EXPANDED_SIZE -cnotmatch '^\d{1,10}$' -or $env:EXPECTED_ARCHIVE_INVENTORY_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or
               $env:AEGIS_TAG_RULESET_ID -cne '21631608' -or $env:AEGIS_MAIN_RULESET_ID -cne '21633557' -or
               $env:RELEASE_OWNERSHIP_MARKER -cnotmatch '^<!-- aegis-publisher:\d+:\d+ -->$' -or
               [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
@@ -595,14 +1492,120 @@ jobs:
             } finally { $Zip.Dispose() }
           }
 
+          function Get-StrictPublisherArchiveEvidence([string]$ArchivePath) {
+            $ProductDirectory = 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64'
+            $Prefix = "$ProductDirectory/"
+            $ArchiveItem = Get-Item -LiteralPath $ArchivePath -Force
+            if (($ArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $ArchiveItem.Length -lt 1KB -or $ArchiveItem.Length -gt 1GB) {
+              throw 'Publisher ZIP file boundary is invalid.'
+            }
+            $ArchiveAncestor = $ArchiveItem.Directory
+            while ($ArchiveAncestor) {
+              if (($ArchiveAncestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Publisher ZIP path has a reparse-point ancestor.' }
+              $ArchiveAncestor = $ArchiveAncestor.Parent
+            }
+            $Zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+            $Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $PathNodes = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+            $Rows = [Collections.Generic.List[object]]::new()
+            [long]$ExpandedSize = 0
+            $FileCount = 0
+            try {
+              if ($Zip.Entries.Count -lt 2 -or $Zip.Entries.Count -gt 20000) { throw 'Publisher ZIP entry count is outside the strict bound.' }
+              foreach ($Entry in $Zip.Entries) {
+                $OriginalName = $Entry.FullName
+                $Name = $OriginalName.Replace('\', '/')
+                $IsDirectory = $Name.EndsWith('/')
+                $PathText = if ($IsDirectory) { $Name.TrimEnd('/') } else { $Name }
+                $Segments = @($PathText.Split('/'))
+                if ([string]::IsNullOrWhiteSpace($Name) -or $OriginalName -cne $Name -or $Name.Length -gt 4096 -or $Name.StartsWith('/') -or $Name.Contains(':') -or $Name.Contains('//') -or
+                    $Name.IndexOfAny([char[]]@(0..31)) -ge 0 -or
+                    $Name -cne $Name.Normalize([Text.NormalizationForm]::FormC) -or
+                    (-not $Name.StartsWith($Prefix, [StringComparison]::Ordinal) -and $Name -cne $Prefix) -or
+                    @($Segments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -in @('.', '..') -or $_.Length -gt 255 -or $_.Trim() -cne $_ -or $_.TrimEnd(' ', '.') -cne $_ -or $_ -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$' }).Count -ne 0 -or
+                    -not $Seen.Add($Name.TrimEnd('/'))) { throw "Publisher ZIP has traversal, root-level, duplicate, case-colliding, or noncanonical entry: $Name" }
+                for ($NodeIndex = 0; $NodeIndex -lt $Segments.Count; $NodeIndex++) {
+                  $NodePath = @($Segments[0..$NodeIndex]) -join '/'
+                  $NodeKind = if ($NodeIndex -eq ($Segments.Count - 1) -and -not $IsDirectory) { 'file' } else { 'directory' }
+                  if ($PathNodes.ContainsKey($NodePath)) {
+                    $ExistingNode = $PathNodes[$NodePath]
+                    if ([string]$ExistingNode.path -cne $NodePath -or [string]$ExistingNode.type -cne $NodeKind) { throw "Publisher ZIP has an implicit directory case collision or file/directory conflict: $NodePath" }
+                  } else { $PathNodes.Add($NodePath, [ordered]@{ path = $NodePath; type = $NodeKind }) }
+                }
+                $External = [uint32]([int64]$Entry.ExternalAttributes -band 0xffffffffL)
+                $UnixType = ($External -shr 16) -band 0xF000
+                if ($UnixType -eq 0xA000 -or $UnixType -notin @(0, 0x4000, 0x8000) -or
+                    ($IsDirectory -and $UnixType -notin @(0, 0x4000)) -or (-not $IsDirectory -and $UnixType -eq 0x4000) -or
+                    (($External -band 0xFFFF) -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Publisher ZIP has a symlink/reparse entry: $Name" }
+                if ($IsDirectory) {
+                  if ($Entry.Length -ne 0) { throw "Publisher ZIP directory entry has content: $Name" }
+                  $Rows.Add([ordered]@{ path = $Name; type = 'directory'; size = 0; sha256 = '-' })
+                  continue
+                }
+                $ExpandedSize += [long]$Entry.Length
+                if ($Entry.Length -gt 512MB -or $ExpandedSize -gt 2GB) { throw 'Publisher ZIP expanded-size bound was exceeded.' }
+                $Stream = $Entry.Open()
+                try { $Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Stream)).ToLowerInvariant() } finally { $Stream.Dispose() }
+                $Rows.Add([ordered]@{ path = $Name; type = 'file'; size = [long]$Entry.Length; sha256 = $Hash })
+                $FileCount++
+              }
+            } finally { $Zip.Dispose() }
+            if ($FileCount -lt 2 -or -not $PathNodes.ContainsKey($ProductDirectory) -or
+                [string]$PathNodes[$ProductDirectory].path -cne $ProductDirectory -or [string]$PathNodes[$ProductDirectory].type -cne 'directory') {
+              throw 'Publisher ZIP lacks one exact product prefix and bounded files.'
+            }
+            $InventoryText = (@($Rows | Sort-Object path | ForEach-Object { "$($_.type)`t$($_.size)`t$($_.sha256)`t$($_.path)" }) -join "`n") + "`n"
+            $InventoryHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($InventoryText))).ToLowerInvariant()
+            return [pscustomobject]@{
+              entryCount = $Rows.Count; fileCount = $FileCount; expandedSize = $ExpandedSize; inventorySha256 = $InventoryHash
+              files = @($Rows | Where-Object type -ceq 'file' | Sort-Object path); extractedNodes = @($PathNodes.Values | Sort-Object path)
+            }
+          }
+
           function Assert-ArchiveSignatures([string]$ArchivePath, [string]$Phase) {
             $Root = Join-Path $env:RUNNER_TEMP ("aegis-publisher-$Phase-" + [Guid]::NewGuid().ToString('N'))
             try {
+              $ArchiveEvidence = Get-StrictPublisherArchiveEvidence $ArchivePath
+              if ([int]$ArchiveEvidence.entryCount -ne [int]$env:EXPECTED_ARCHIVE_ENTRY_COUNT -or
+                  [int]$ArchiveEvidence.fileCount -ne [int]$env:EXPECTED_ARCHIVE_FILE_COUNT -or
+                  [long]$ArchiveEvidence.expandedSize -ne [long]$env:EXPECTED_ARCHIVE_EXPANDED_SIZE -or
+                  [string]$ArchiveEvidence.inventorySha256 -cne $env:EXPECTED_ARCHIVE_INVENTORY_SHA256) {
+                throw "ZIP full safe-entry inventory differs from twice-verified lineage during $Phase."
+              }
+              $ExtractionAncestor = Get-Item -LiteralPath ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Root))) -Force
+              while ($ExtractionAncestor) {
+                if (($ExtractionAncestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "ZIP extraction path has a reparse-point ancestor during $Phase." }
+                $ExtractionAncestor = $ExtractionAncestor.Parent
+              }
               Expand-Archive -LiteralPath $ArchivePath -DestinationPath $Root
-              $Products = @(Get-ChildItem -LiteralPath $Root -Directory)
-              if ($Products.Count -ne 1 -or $Products[0].Name -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64') { throw "ZIP top-level schema is invalid during $Phase." }
-              $Entries = @(Get-ChildItem -LiteralPath $Products[0].FullName -Recurse -Force)
+              if ((Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant() -cne $env:EXPECTED_ARCHIVE_SHA256) {
+                throw "ZIP changed during strict validation/extraction in $Phase."
+              }
+              $RootChildren = @(Get-ChildItem -LiteralPath $Root -Force)
+              if ($RootChildren.Count -ne 1 -or -not $RootChildren[0].PSIsContainer -or $RootChildren[0].Name -cne 'QuantScenarioStudio-by-LAI-ZEYU-1.5.0-x64') { throw "ZIP top-level schema has an extra root file or wrong directory during $Phase." }
+              $Entries = @(Get-ChildItem -LiteralPath $RootChildren[0].FullName -Recurse -Force)
               if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) { throw "ZIP contains a reparse point during $Phase." }
+              $ActualNodes = @((Get-Item -LiteralPath $RootChildren[0].FullName -Force); $Entries) | ForEach-Object {
+                [ordered]@{ path = [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/'); type = if ($_.PSIsContainer) { 'directory' } else { 'file' } }
+              } | Sort-Object path
+              $ExpectedNodes = @($ArchiveEvidence.extractedNodes)
+              if ($ActualNodes.Count -ne $ExpectedNodes.Count) { throw "ZIP full extraction node count differs during $Phase." }
+              for ($NodeIndex = 0; $NodeIndex -lt $ExpectedNodes.Count; $NodeIndex++) {
+                if ([string]$ActualNodes[$NodeIndex].path -cne [string]$ExpectedNodes[$NodeIndex].path -or
+                    [string]$ActualNodes[$NodeIndex].type -cne [string]$ExpectedNodes[$NodeIndex].type) {
+                  throw "ZIP full extraction node inventory differs during $Phase`: $([string]$ActualNodes[$NodeIndex].path)"
+                }
+              }
+              $ActualFiles = @($Entries | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)
+              if ($ActualFiles.Count -ne @($ArchiveEvidence.files).Count) { throw "ZIP extracted file count differs during $Phase." }
+              for ($Index = 0; $Index -lt $ActualFiles.Count; $Index++) {
+                $Relative = [IO.Path]::GetRelativePath($Root, $ActualFiles[$Index].FullName).Replace('\', '/')
+                $Expected = @($ArchiveEvidence.files)[$Index]
+                if ($Relative -cne [string]$Expected.path -or $ActualFiles[$Index].Length -ne [long]$Expected.size -or
+                    (Get-FileHash -Algorithm SHA256 -LiteralPath $ActualFiles[$Index].FullName).Hash.ToLowerInvariant() -cne [string]$Expected.sha256) {
+                  throw "ZIP full extraction inventory differs during $Phase`: $Relative"
+                }
+              }
               $PeFiles = [Collections.Generic.List[IO.FileInfo]]::new()
               foreach ($File in @($Entries | Where-Object { -not $_.PSIsContainer })) {
                 $Kind = Get-MagicKind $File.FullName
@@ -682,13 +1685,18 @@ jobs:
             try {
               $CreatedAt = [DateTimeOffset]::Parse([string]$Release.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
             } catch { throw 'Release created_at is missing or malformed.' }
-            if ([long]$Release.id -ne $ExpectedId -or $ExpectedId -le 0 -or
-                [string]$Release.tag_name -cne $env:RELEASE_TAG -or
+            if ($null -eq $OwnedReleaseId -or $null -eq $OwnedReleaseCreatedAt -or [string]::IsNullOrWhiteSpace($OwnedReleaseNodeId) -or
+                [long]$Release.id -ne $ExpectedId -or $ExpectedId -ne [long]$OwnedReleaseId -or $ExpectedId -le 0 -or
+                [string]$Release.node_id -cne [string]$OwnedReleaseNodeId -or
+                $CreatedAt.ToUniversalTime() -ne $OwnedReleaseCreatedAt.ToUniversalTime() -or
+                [string]$Release.url -cne "$ApiBase/releases/$ExpectedId") {
+              throw 'Release no longer has the immutable id/node_id/created_at identity established by this run one successful HTTP 201 response.'
+            }
+            if ([string]$Release.tag_name -cne $env:RELEASE_TAG -or
                 [string]$Release.name -cne $ExpectedReleaseTitle -or [string]$Release.body -cne $ExpectedReleaseBody -or
                 [string]$Release.author.login -cne 'github-actions[bot]' -or $Release.prerelease -ne $false -or
-                [string]$Release.url -cne "$ApiBase/releases/$ExpectedId" -or
                 $CreatedAt -lt $CreatedNotBefore -or $CreatedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
-              throw 'Release does not carry this run exact ID, owner, marker, title, body, tag, API URL, and creation-window proof.'
+              throw 'The exact owned Release mutable publication state, author, tag, or creation window drifted.'
             }
             if (($ExpectedVisibility -ceq 'draft' -and $Release.draft -ne $true) -or
                 ($ExpectedVisibility -ceq 'public' -and $Release.draft -ne $false)) {
@@ -737,13 +1745,35 @@ jobs:
             $Main = Invoke-GitHubJsonRequest -Method 'GET' -Uri "$ApiBase/rulesets/$env:AEGIS_MAIN_RULESET_ID" -ExpectedStatus @(200)
             $MainTypes = @($Main.rules | ForEach-Object type | Sort-Object)
             $PullRules = @($Main.rules | Where-Object type -ceq 'pull_request')
+            $StatusRules = @($Main.rules | Where-Object type -ceq 'required_status_checks')
             if ([long]$Main.id -ne 21633557 -or $Main.enforcement -cne 'active' -or $Main.target -cne 'branch' -or
                 @($Main.bypass_actors).Count -ne 0 -or (@($Main.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
-                @($Main.conditions.ref_name.exclude).Count -ne 0 -or ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request' -or
-                $PullRules.Count -ne 1 -or -not $PullRules[0].parameters.dismiss_stale_reviews_on_push -or
-                -not $PullRules[0].parameters.required_review_thread_resolution -or
-                (@($PullRules[0].parameters.allowed_merge_methods | Sort-Object) -join '|') -cne 'merge|rebase|squash') {
-              throw 'Exact protected-main ruleset or review-thread gate drifted.'
+                @($Main.conditions.ref_name.exclude).Count -ne 0 -or ($MainTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks' -or
+                $PullRules.Count -ne 1 -or $StatusRules.Count -ne 1) {
+              throw 'Exact protected-main ruleset drifted.'
+            }
+            $PullParameters = $PullRules[0].parameters
+            $PullKeys = @($PullParameters.PSObject.Properties.Name | Sort-Object)
+            $ExpectedPullKeys = @('allowed_merge_methods', 'dismiss_stale_reviews_on_push', 'require_code_owner_review', 'require_extra_approval_for_unattributed_changes', 'require_last_push_approval', 'required_approving_review_count', 'required_review_thread_resolution', 'required_reviewers') | Sort-Object
+            if (($PullKeys -join '|') -cne ($ExpectedPullKeys -join '|') -or
+                (@($PullParameters.allowed_merge_methods | Sort-Object) -join '|') -cne 'merge|rebase|squash' -or
+                -not $PullParameters.dismiss_stale_reviews_on_push -or -not $PullParameters.required_review_thread_resolution -or
+                $PullParameters.require_code_owner_review -or $PullParameters.require_extra_approval_for_unattributed_changes -or
+                $PullParameters.require_last_push_approval -or [int]$PullParameters.required_approving_review_count -ne 0 -or
+                @($PullParameters.required_reviewers).Count -ne 0) {
+              throw 'Exact protected-main pull-request policy drifted.'
+            }
+            $StatusParameters = $StatusRules[0].parameters
+            $StatusKeys = @($StatusParameters.PSObject.Properties.Name | Sort-Object)
+            $ExpectedStatusKeys = @('do_not_enforce_on_create', 'required_status_checks', 'strict_required_status_checks_policy') | Sort-Object
+            $Checks = @($StatusParameters.required_status_checks)
+            $Contexts = @($Checks | ForEach-Object { [string]$_.context } | Sort-Object)
+            if (($StatusKeys -join '|') -cne ($ExpectedStatusKeys -join '|') -or
+                -not $StatusParameters.strict_required_status_checks_policy -or $StatusParameters.do_not_enforce_on_create -or
+                $Checks.Count -ne 2 -or ($Contexts -join '|') -cne 'verify (3.10)|verify (3.12)' -or
+                @($Checks | Where-Object { [long]$_.integration_id -ne 15368 }).Count -ne 0 -or
+                @($Checks | Where-Object { (@($_.PSObject.Properties.Name | Sort-Object) -join '|') -cne 'context|integration_id' }).Count -ne 0) {
+              throw 'Exact strict GitHub Actions required-status-check policy drifted.'
             }
           }
 
@@ -770,7 +1800,9 @@ jobs:
             if ([int]$Response.StatusCode -ne 201) { throw "Exact-ID asset upload returned HTTP $([int]$Response.StatusCode)." }
             try { $Asset = [string]$Response.Content | ConvertFrom-Json } catch { throw 'Exact-ID asset upload returned malformed JSON.' }
             $Digest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
-            if ([long]$Asset.id -le 0 -or [string]$Asset.name -cne $File.Name -or [string]$Asset.state -cne 'uploaded' -or
+            $AssetId = [long]$Asset.id
+            if ($AssetId -le 0 -or [string]$Asset.url -cne "$ApiBase/releases/assets/$AssetId" -or
+                [string]$Asset.name -cne $File.Name -or [string]$Asset.state -cne 'uploaded' -or
                 [long]$Asset.size -ne $File.Length -or [string]$Asset.digest -cne $Digest) { throw 'Exact-ID upload response does not bind the local file.' }
           }
 
@@ -791,7 +1823,10 @@ jobs:
             $Names = @($Assets | ForEach-Object { [string]$_.name }) | Sort-Object
             $AssetIds = @($Assets | ForEach-Object { [long]$_.id }) | Sort-Object
             if ($Assets.Count -ne 2 -or (Compare-Object $ExpectedNames $Names) -or
-                @($Assets | Where-Object { [long]$_.id -le 0 -or [string]$_.state -cne 'uploaded' -or [string]$_.digest -cne $ExpectedDigests[[string]$_.name] }).Count -ne 0) {
+                @($Assets | Where-Object {
+                  [long]$_.id -le 0 -or [string]$_.url -cne "$ApiBase/releases/assets/$([long]$_.id)" -or
+                  [string]$_.state -cne 'uploaded' -or [string]$_.digest -cne $ExpectedDigests[[string]$_.name]
+                }).Count -ne 0) {
               throw "Owned Release asset inventory is invalid during $Phase."
             }
             $RemoteRoot = Join-Path $env:RUNNER_TEMP ("aegis-remote-$Phase-" + [Guid]::NewGuid().ToString('N'))
@@ -875,41 +1910,33 @@ jobs:
           $OwnedReleaseCreatedAt = $null
           $OwnedReleaseNodeId = $null
           try {
-            $Created = $null
-            try {
-              $Created = Invoke-GitHubJsonRequest -Method 'POST' -Uri "$ApiBase/releases" -ExpectedStatus @(201) -Body @{
-                tag_name = $env:RELEASE_TAG
-                target_commitish = $env:SOURCE_COMMIT
-                name = $ExpectedReleaseTitle
-                body = $ExpectedReleaseBody
-                draft = $true
-                prerelease = $false
-                generate_release_notes = $false
-              }
-            } catch {
-              $CreateFailure = $_.Exception.Message
-              $PossibleOwned = $null
-              foreach ($Attempt in 1..4) {
-                $PossibleOwned = Get-ReleaseByTagOrNull
-                if ($PossibleOwned) { break }
-                Start-Sleep -Seconds ([Math]::Pow(2, $Attempt - 1))
-              }
-              if (-not $PossibleOwned) { throw "Release creation response was ambiguous and no exact-marker Release became visible within the bounded ownership window; no remote object will be edited: $CreateFailure" }
-              try {
-                Assert-OwnedRelease -Release $PossibleOwned -ExpectedId ([long]$PossibleOwned.id) -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft'
-              } catch {
-                throw "Release creation is ambiguous and no remote Release will be edited: $CreateFailure; ownership probe: $($_.Exception.Message)"
-              }
-              $Created = $PossibleOwned
+            # This single request is the only operation that may establish ownership.
+            # Any exception, non-201 status, missing body or malformed immutable field
+            # leaves OwnedReleaseId null: no Release lookup, adoption, PATCH, upload or
+            # rollback is permitted after such an ambiguous creation outcome.
+            $Created = Invoke-GitHubJsonRequest -Method 'POST' -Uri "$ApiBase/releases" -ExpectedStatus @(201) -Body @{
+              tag_name = $env:RELEASE_TAG
+              target_commitish = $env:SOURCE_COMMIT
+              name = $ExpectedReleaseTitle
+              body = $ExpectedReleaseBody
+              draft = $true
+              prerelease = $false
+              generate_release_notes = $false
             }
             $CandidateId = [long]$Created.id
-            Assert-OwnedRelease -Release $Created -ExpectedId $CandidateId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft'
             try {
-              $OwnedReleaseCreatedAt = [DateTimeOffset]::Parse([string]$Created.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
-            } catch { throw 'Owned Release immutable created_at is malformed.' }
-            $OwnedReleaseNodeId = [string]$Created.node_id
-            if ([string]::IsNullOrWhiteSpace($OwnedReleaseNodeId)) { throw 'Owned Release immutable node_id is missing.' }
+              $CandidateCreatedAt = [DateTimeOffset]::Parse([string]$Created.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+            } catch { throw 'HTTP 201 Release immutable created_at is malformed; ownership was not established and no remote object will be queried or mutated.' }
+            $CandidateNodeId = [string]$Created.node_id
+            if ($CandidateId -le 0 -or [string]::IsNullOrWhiteSpace($CandidateNodeId) -or
+                [string]$Created.url -cne "$ApiBase/releases/$CandidateId" -or
+                $CandidateCreatedAt -lt $CreationWindowStart -or $CandidateCreatedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(5)) {
+              throw 'HTTP 201 response lacks exact immutable id/node_id/created_at ownership evidence; no remote object will be queried or mutated.'
+            }
+            $OwnedReleaseCreatedAt = $CandidateCreatedAt
+            $OwnedReleaseNodeId = $CandidateNodeId
             $OwnedReleaseId = $CandidateId
+            Assert-OwnedRelease -Release $Created -ExpectedId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft'
             Upload-OwnedReleaseAsset -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -FilePath $Archive
             Upload-OwnedReleaseAsset -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -FilePath $Checksum
             [void](Get-OwnedRelease -ReleaseId $OwnedReleaseId -CreatedNotBefore $CreationWindowStart -ExpectedVisibility 'draft')

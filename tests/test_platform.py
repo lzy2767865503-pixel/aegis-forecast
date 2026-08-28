@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import closing
 from http.client import HTTPConnection
 from pathlib import Path
 from aegis_quant.audit import AuditLedger
@@ -99,11 +100,33 @@ class AuditAndRuntimeTests(unittest.TestCase):
         ledger.append("TEST", "ONE", {"value": 1}, "trace-1")
         ledger.append("TEST", "TWO", {"value": 2}, "trace-2")
         self.assertTrue(ledger.verify()["valid"])
-        with sqlite3.connect(self.database) as connection:
-            connection.execute(
-                "UPDATE audit_events SET payload_json='{}' WHERE sequence=1"
-            )
+        with closing(sqlite3.connect(self.database)) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE audit_events SET payload_json='{}' WHERE sequence=1"
+                )
         self.assertFalse(ledger.verify()["valid"])
+
+    def test_database_contexts_close_connections(self) -> None:
+        ledger = AuditLedger(self.database)
+        with ledger.connect() as audit_connection:
+            self.assertEqual(
+                audit_connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
+                0,
+            )
+        with self.assertRaises(sqlite3.ProgrammingError):
+            audit_connection.execute("SELECT 1")
+
+        registry = ScenarioIntegrityRegistry(self.database, audit=ledger)
+        with registry.connect() as integrity_connection:
+            self.assertEqual(
+                integrity_connection.execute(
+                    "SELECT COUNT(*) FROM scenario_integrity_checks"
+                ).fetchone()[0],
+                0,
+            )
+        with self.assertRaises(sqlite3.ProgrammingError):
+            integrity_connection.execute("SELECT 1")
 
     def test_store_simulation_execution_cannot_be_enabled_by_environment(self) -> None:
         previous = os.environ.pop("AEGIS_ENABLE_SIMULATION_EXECUTION", None)
@@ -281,7 +304,16 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertEqual(workflow.count("Strict WACK round"), 2)
         self.assertEqual(workflow.count("-WackRound"), 2)
         self.assertIn("prepare-store-handoff.ps1", workflow)
-        self.assertNotIn("actions/upload-artifact", workflow)
+        self.assertEqual(workflow.count("actions/upload-artifact"), 1)
+        self.assertIn("prepare-store-listing-screenshot.ps1", workflow)
+        self.assertEqual(workflow.count("artifacts/store-listing-public/Quant-Scenario-Studio-Store-0"), 4)
+        screenshot_upload = workflow.split("Upload only four exact-candidate Store listing PNGs", 1)[1]
+        self.assertNotIn(".msix", screenshot_upload.lower())
+        self.assertIn("-ValidatePublicOnly", workflow)
+        self.assertLess(
+            workflow.index("-ValidatePublicOnly"),
+            workflow.index("Upload only four exact-candidate Store listing PNGs"),
+        )
         self.assertIn("retain-private-store-handoff.ps1", workflow)
         self.assertIn("AEGIS_PRIVATE_STORE_HANDOFF_ROOT", workflow)
         self.assertNotIn(
@@ -301,6 +333,19 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("AEGIS_APPROVED_WACK_FILE_VERSION", workflow)
+        for protected_wack_value in (
+            "AEGIS_APPROVED_WACK_SHA256",
+            "AEGIS_APPROVED_WACK_SIGNER_SUBJECT",
+            "AEGIS_APPROVED_WACK_SIGNER_THUMBPRINT",
+            "AEGIS_APPROVED_WACK_TEST_COUNT",
+            "AEGIS_APPROVED_WACK_TEST_INVENTORY_SHA256",
+        ):
+            self.assertIn(protected_wack_value, workflow)
+        self.assertIn("Remove-Item -LiteralPath $ExactPath -DeleteKey", (root / "scripts/windows/remove-development-certificate.ps1").read_text(encoding="utf-8"))
+        self.assertIn("postCleanupCngKeyFiles", workflow)
+        self.assertIn("required_status_checks", workflow)
+        self.assertIn("integration_id -ne 15368", workflow)
+        self.assertIn("'verify (3.10)', 'verify (3.12)'", workflow)
         self.assertLess(
             workflow.index("Require trusted main, reserved Partner identity"),
             workflow.index("actions/setup-python@"),
@@ -339,11 +384,34 @@ class StorePackageBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn(".msix", release.lower())
         self.assertEqual(release.count("Signed same-byte portable lifecycle round"), 2)
-        self.assertIn("setup-esigner-cka.ps1", release)
         self.assertIn("persist-credentials: false", release)
         self.assertIn("permissions:\n  contents: read", release)
-        self.assertIn("sign-and-test:", release)
+        self.assertIn("build-private-unsigned:", release)
+        self.assertIn("sign-private-no-checkout:", release)
+        self.assertIn("verify-signed:", release)
         self.assertIn("publish-release:", release)
+        build_job = release.split("  build-private-unsigned:", 1)[1].split(
+            "  sign-private-no-checkout:", 1
+        )[0]
+        signer_job = release.split("  sign-private-no-checkout:", 1)[1].split(
+            "  verify-signed:", 1
+        )[0]
+        self.assertNotIn("secrets.", build_job)
+        self.assertNotIn("actions/upload-artifact", build_job)
+        self.assertIn("retain-private-signing-handoff.ps1", build_job)
+        self.assertNotIn("actions/checkout", signer_job)
+        self.assertIn("ENVIRONMENT_ONLY_NO_ARGV", signer_job)
+        self.assertIn("credentialsPassedInArgv", signer_job)
+        self.assertIn("cngProviderBaselineRestored", signer_job)
+        self.assertIn("privateKeyBaselineRestored", signer_job)
+        self.assertIn("deleteKeyAttempted", signer_job)
+        self.assertIn("deleteKeySucceeded", signer_job)
+        self.assertIn("machineGuidSha256", signer_job)
+        self.assertIn("signerRunnerName", signer_job)
+        self.assertIn("signer-vault", signer_job)
+        self.assertIn("[IO.Directory]::Move($IngressRun, $VaultClaiming)", signer_job)
+        self.assertIn("[IO.FileShare]::Read", signer_job)
+        self.assertIn("archiveEntryInventorySha256", signer_job)
         publisher = release.split("  publish-release:", 1)[1]
         self.assertNotIn("actions/checkout", publisher)
         self.assertIn("contents: write", publisher)
@@ -354,6 +422,9 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("Restore-OwnedReleaseToPrivateDraft", release)
         self.assertIn("Exact-ID rollback immutable ownership proof failed", release)
         self.assertIn("OwnedReleaseNodeId", release)
+        self.assertIn("one successful HTTP 201 response", publisher)
+        self.assertIn("no Release lookup, adoption, PATCH, upload or", publisher)
+        self.assertNotIn("$PossibleOwned", publisher)
         self.assertIn("Exact-ID asset upload", release)
         self.assertIn("-Phase 'postpublish'", release)
         self.assertIn("PE must have exactly one primary signer", publisher)
@@ -365,6 +436,42 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", release)
         self.assertIn("Assert-TagOnProtectedMain", publisher)
         self.assertIn("Assert-RemoteAssets", publisher)
+        self.assertGreaterEqual(release.count("required_status_checks"), 3)
+        self.assertGreaterEqual(release.count("integration_id -ne 15368"), 3)
+        self.assertGreaterEqual(release.count("verify (3.10)|verify (3.12)"), 3)
+
+        hosted = (root / ".github/workflows/windows-hosted-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("runs-on: windows-2025", hosted)
+        self.assertIn("Build one MSIX and run two native lifecycle passes", hosted)
+        self.assertIn("github.event.pull_request.head.sha || github.sha", hosted)
+        for candidate_workflow in (workflow, hosted):
+            self.assertIn("Microsoft Software Key Storage Provider", candidate_workflow)
+            self.assertIn("-KeyProtection None", candidate_workflow)
+            self.assertNotIn("-KeySpec ", candidate_workflow)
+            self.assertIn("X509Store]::new('TrustedPeople', 'LocalMachine')", candidate_workflow)
+            self.assertNotIn("-addstore Root", candidate_workflow)
+            self.assertIn("Remove build-only trust before independent native QA", candidate_workflow)
+        self.assertEqual(hosted.count("./scripts/windows/verify-native.ps1"), 2)
+        self.assertIn("-QaRound 1", hosted)
+        self.assertIn("-QaRound 2", hosted)
+        self.assertIn("generate-hosted-candidate-evidence.ps1", hosted)
+        self.assertIn("software binary or certificate", hosted)
+        self.assertIn("retention-days: 1", hosted)
+        self.assertNotIn("artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_store-unsigned.msix\n          if-no-files-found", hosted)
+        self.assertNotIn(".msix\n          if-no-files-found", hosted.lower())
+        self.assertNotIn("contents: write", hosted)
+
+        hosted_evidence = (
+            root / "scripts/windows/generate-hosted-candidate-evidence.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("nativeQaPasses = 2", hosted_evidence)
+        self.assertIn("independentLaunchNonces = 2", hosted_evidence)
+        self.assertIn("softwareBinariesUploaded = $false", hosted_evidence)
+        self.assertIn("developmentCertificateUploaded = $false", hosted_evidence)
+        self.assertIn("packageAbsentAfterUninstall", hosted_evidence)
+        self.assertIn("sidecarExitedViaParentWatchdog", hosted_evidence)
 
     def test_windows_scripts_fail_closed_and_embed_source_hash_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -393,8 +500,41 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("creationTimeUtcTicks", native)
         self.assertIn("Capture-NativeOwnedObjects", native)
         self.assertIn("Native QA verification/cleanup failures", native)
+        self.assertIn("Get-ValidatedStoreScreenshot", native)
+        self.assertIn("storeListingScreenshotPrivacyValidated", native)
+        self.assertIn("storeListingScreenshotCount = 4", native)
+        self.assertIn("1366x768 minimum dimensions", native)
         self.assertNotIn('| Remove-AppxPackage', native)
         self.assertNotIn('| Stop-Process', native)
+        pass1 = (root / "scripts/windows/verify-pass1.ps1").read_text(encoding="utf-8")
+        self.assertIn('$env:PYTHONUTF8 = "1"', pass1)
+        self.assertIn('$env:PYTHONIOENCODING = "utf-8"', pass1)
+        self.assertIn('value = $PreviousPythonUtf8', pass1)
+        self.assertIn('value = $PreviousPythonIoEncoding', pass1)
+        screenshot = (
+            root / "scripts/windows/prepare-store-listing-screenshot.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("twice-QA/twice-WACK candidate lineage", screenshot)
+        self.assertIn("metadata-bearing", screenshot)
+        self.assertIn("Post-cleanup four-PNG", screenshot)
+        self.assertIn("artifacts\\store-listing-public", screenshot)
+        self.assertIn("four distinct exact-candidate views", screenshot)
+        self.assertNotIn("docs/assets/dashboard-demo.png", screenshot)
+        shell = (
+            root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CapturePreviewAsync", shell)
+        self.assertIn("AsRandomAccessStream", shell)
+        self.assertIn("GetDpiForWindow(window) != 96", shell)
+        self.assertIn("Browser.Width = storeScreenshotWidth", shell)
+        self.assertIn("Browser.Height = storeScreenshotHeight", shell)
+        self.assertIn("width != storeScreenshotWidth", shell)
+        self.assertLess(
+            shell.index("Browser.Width = storeScreenshotWidth"),
+            shell.index("await Browser.CoreWebView2.CapturePreviewAsync"),
+        )
+        self.assertIn("storeListingScreenshotPrivacyValidated = true", shell)
+        self.assertIn("screenshots.Count != 4", shell)
         wack = (root / "scripts/windows/verify-wack.ps1").read_text(encoding="utf-8")
         self.assertIn("powershell-transcript.log", wack)
         self.assertIn('Assert-CandidateBytes "completion"', wack)
@@ -407,20 +547,36 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("approved AppCert executable is already running", wack)
         self.assertIn("creationTimeUtcTicks", wack)
         self.assertIn("WACK verification/cleanup failures", wack)
+        self.assertIn("approvedWackFileVersion", wack)
+        self.assertIn("appcertSha256", wack)
+        self.assertIn("testInventorySha256", wack)
+        self.assertIn("immediately before execution", wack)
+        self.assertIn("[IO.FileShare]::Read", wack)
         self.assertNotIn("Preflight proved that none", wack)
+        wack_policy = (root / "scripts/windows/wack-report-policy.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('GetAttribute("LATEST_VERSION")', wack_policy)
+        self.assertIn('GetAttribute("VERSION")', wack_policy)
+        self.assertIn("WACK TEST INDEX and NAME values must each be unique", wack_policy)
+        self.assertIn("conflicting direct STATUS/RESULT/OUTCOME", wack_policy)
+        self.assertIn("testInventorySha256", wack_policy)
         cka_setup = (root / "scripts/windows/setup-esigner-cka.ps1").read_text(
             encoding="utf-8"
         )
         cka_cleanup = (root / "scripts/windows/cleanup-esigner-cka.ps1").read_text(
             encoding="utf-8"
         )
-        self.assertIn("ownedSignerThumbprints", cka_setup)
-        self.assertIn("PreexistingMySet", cka_setup)
-        self.assertIn("SSL.com CKA helper process tree remained", cka_setup)
-        self.assertIn("ownedSignerThumbprints", cka_cleanup)
-        self.assertIn("Remove-Item -LiteralPath $CertificatePath", cka_cleanup)
-        self.assertIn('"unins000.exe"', cka_setup)
-        self.assertIn("SSL.com CKA uninstaller", cka_cleanup)
+        self.assertIn("repository-managed SSL.com CKA bootstrap is disabled", cka_setup)
+        self.assertIn("ENVIRONMENT_ONLY_NO_ARGV", cka_setup)
+        self.assertNotIn("ArgumentList", cka_setup)
+        self.assertNotIn('"-user"', cka_setup)
+        self.assertNotIn('"-pass"', cka_setup)
+        self.assertNotIn('"-totp"', cka_setup)
+        self.assertIn("repository-managed CKA cleanup is disabled", cka_cleanup)
+        self.assertIn("DeleteKey", cka_cleanup)
+        self.assertIn("CNG provider", cka_cleanup)
+        self.assertIn("private-key", cka_cleanup)
         portable_lifecycle = (
             root / "scripts/windows/verify-github-portable-lifecycle.ps1"
         ).read_text(encoding="utf-8")
@@ -429,6 +585,21 @@ class StorePackageBoundaryTests(unittest.TestCase):
             root / "scripts/windows/new-github-portable-archive.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("archive and checksum must not preexist", archive_builder)
+        signing_handoff = (
+            root / "scripts/windows/retain-private-signing-handoff.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("AegisGitHubSigningHandoff", signing_handoff)
+        self.assertIn("DriveFormat -cne 'NTFS'", signing_handoff)
+        self.assertIn("machineGuidSha256", signing_handoff)
+        self.assertIn("githubArtifactUploaded = $false", signing_handoff)
+        self.assertIn("build account SID must match and must not be a local Administrator", signing_handoff)
+        self.assertIn("ingress", signing_handoff)
+        self.assertIn("signer-vault", signing_handoff)
+        portable_archive = (
+            root / "scripts/windows/verify-portable-archive.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("implicit directory case collision", portable_archive)
+        self.assertIn("full extraction node inventory differs", portable_archive)
         signature_policy = (root / "scripts/windows/verify-github-signatures.ps1").read_text(
             encoding="utf-8"
         )
@@ -440,11 +611,32 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("Microsoft Corporation", trusted_sdk)
         self.assertIn("RevocationMode", trusted_sdk)
         self.assertIn("FileVersionRaw", trusted_sdk)
+        self.assertIn("$Current = $Tool.Directory", trusted_sdk)
+        self.assertIn("[StringComparison]::OrdinalIgnoreCase", trusted_sdk)
+        self.assertIn("Assert-AegisValidAppPackageSignature", trusted_sdk)
         equivalence = (root / "scripts/windows/msix-payload-equivalence.ps1").read_text(
             encoding="utf-8"
         )
         self.assertIn("payloadTreeSha256", equivalence)
         self.assertIn("AppxSignature.p7x", equivalence)
+        self.assertIn("AppxMetadata/CodeIntegrity.cat", equivalence)
+        self.assertIn("application/vnd.ms-appx.signature", equivalence)
+        self.assertIn("application/vnd.ms-pkiseccat", equivalence)
+        self.assertIn("must add exactly one signature mapping and one CodeIntegrity.cat mapping", equivalence)
+        self.assertIn("SignTool changed an existing content-type mapping", equivalence)
+        native_qa = (root / "scripts/windows/verify-native.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ui_failure.json", native_qa)
+        self.assertIn("malformed or unbound QA failure marker", native_qa)
+        self.assertIn("Packaged app reported native QA failure", native_qa)
+        self.assertIn("Get-CanonicalJsonTimestamp", native_qa)
+        self.assertIn('[Text.Json.JsonValueKind]::String', native_qa)
+        native_shell = (
+            root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("WriteQaFailureMarker", native_shell)
+        self.assertIn("Normal Store users never have qa_expected.json", native_shell)
         handoff = (root / "scripts/windows/prepare-store-handoff.ps1").read_text(
             encoding="utf-8"
         )
