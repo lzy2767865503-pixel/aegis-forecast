@@ -136,6 +136,15 @@ screenshots are explicitly **not ready**. The artifact is a short-lived transfer
 bundle only: an operator must review and upload these exact PNGs in Partner Center.
 It does not prove Microsoft validation, submission, certification or acceptance.
 
+An owner-dispatched run on the exact no-bypass protected `main` commit may also
+create a separate one-day Actions transfer artifact containing the unsigned
+Partner Center MSIX, four twice-validated 1600x900 screenshots, Microsoft SPDX
+SBOM, two-pass lineage and full checksums. That bundle is not a GitHub Release,
+is never attached to a public release page, and must contain neither the signed
+QA copy nor any development certificate/private key. It remains `NOT_SUBMITTED`
+and `NOT_CERTIFIED` until an operator uploads the exact recorded hash to Store ID
+`9NWTH4KJX5GW` and Microsoft reports the later states.
+
 Any additional listing views, if later captured manually, must come from the same
 exact verified candidate at 100% Windows scaling:
 

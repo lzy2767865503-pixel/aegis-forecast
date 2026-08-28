@@ -58,9 +58,12 @@ Backup automatically:
    manifests. Remove unintended cloud copies before continuing. Never upload a
    PFX. The Store-verification workflow retains only the unsigned submission,
    checksum and non-secret lineage JSON under an exact local NTFS ACL permitting
-   only the runner account, SYSTEM and Administrators. It never uploads an MSIX
-   to GitHub or retains the QA certificate/copy; the separate GitHub workflow publishes only its
-   non-Store portable ZIP and checksum.
+   only the runner account, SYSTEM and Administrators. The optional owner-only
+   protected-main hosted transfer lane may upload that unsigned Store package as
+   a one-day Actions artifact together with screenshots, SPDX SBOM and two-pass
+   lineage; it is not a GitHub Release and never contains the QA certificate/copy.
+   The separate end-user GitHub workflow publishes only its non-Store portable
+   ZIP and checksum.
 5. After QA, uninstall the app and verify the PFN/LocalState directory is gone.
    Delete the exact `CurrentUser\My` development certificate with
    `Remove-Item -DeleteKey`, bound to its validated thumbprint and current-user
