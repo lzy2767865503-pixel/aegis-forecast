@@ -204,7 +204,6 @@ jobs:
           ./scripts/windows/generate-hosted-candidate-evidence.ps1
           -OutputRoot (Join-Path $env:RUNNER_TEMP 'aegis-hosted-candidate-evidence')
       - name: Prepare protected-main unsigned Partner Center MSIX, screenshots, SPDX SBOM and lineage
-        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: >-
           ./scripts/windows/prepare-hosted-store-upload.ps1
@@ -294,7 +293,6 @@ jobs:
           include-hidden-files: false
 
       - name: Revalidate the protected-main Partner Center upload bundle after private-work cleanup
-        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -315,11 +313,12 @@ jobs:
               @($Files | Where-Object { $_.Name -match '(?i)(signed-dev|\.cer$|\.pfx$)' }).Count -ne 0) {
             throw 'Partner Center upload staging contains an unsafe entry or development artifact.'
           }
+          $ExpectedSourceCommit = '${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}'
           $Lineage = Get-Content -Raw -LiteralPath (Join-Path $Root 'partner-center-upload.json') | ConvertFrom-Json
           if ([int]$Lineage.schemaVersion -ne 1 -or $Lineage.productId -cne '9NWTH4KJX5GW' -or
               $Lineage.packageIdentity -cne 'LAIZEYU.QuantScenarioStudiobyLAIZEYU' -or
               $Lineage.technicalPublisher -cne 'CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8' -or
-              $Lineage.author -cne 'LAI ZEYU（来泽宇）' -or $Lineage.sourceCommit -cne $env:GITHUB_SHA -or
+              $Lineage.author -cne 'LAI ZEYU（来泽宇）' -or $Lineage.sourceCommit -cne $ExpectedSourceCommit -or
               [int]$Lineage.staticValidationPasses -ne 2 -or [int]$Lineage.runtimeLifecyclePasses -ne 2 -or
               @($Lineage.independentLaunchNonces | Sort-Object -Unique).Count -ne 2 -or
               @($Lineage.screenshots).Count -ne 4 -or @($Lineage.sbom).Count -lt 1 -or
@@ -371,7 +370,7 @@ jobs:
           include-hidden-files: false
 
       - name: Remove the exact protected-main Partner Center upload staging
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
