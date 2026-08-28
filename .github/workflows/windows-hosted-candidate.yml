@@ -309,7 +309,7 @@ jobs:
           if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
               @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0 -or
               @($Files | Where-Object Extension -CEQ '.msix').Count -ne 1 -or
-              @($Files | Where-Object { $_.Extension -cnotin @('.msix', '.json', '.png', '.txt') }).Count -ne 0 -or
+              @($Files | Where-Object { $_.Extension -cnotin @('.msix', '.json', '.png', '.txt', '.sha256') }).Count -ne 0 -or
               @($Files | Where-Object { $_.Name -match '(?i)(signed-dev|\.cer$|\.pfx$)' }).Count -ne 0) {
             throw 'Partner Center upload staging contains an unsafe entry or development artifact.'
           }

@@ -465,6 +465,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("aegis-partner-center-upload-${{ github.sha }}", hosted)
         self.assertIn("path: ${{ runner.temp }}/aegis-partner-center-upload", hosted)
         self.assertIn("UNSIGNED_FOR_PARTNER_CENTER", hosted)
+        self.assertIn("'.sha256'", hosted)
         partner_upload = hosted.split(
             "Upload the exact protected-main unsigned Partner Center bundle for one day",
             1,
