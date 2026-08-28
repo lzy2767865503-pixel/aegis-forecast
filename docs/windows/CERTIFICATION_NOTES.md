@@ -55,10 +55,12 @@ MSIX must include root license, third-party notices and dependency licenses.
 - Upload only the exact reviewed candidate lineage. Store signing and Microsoft
   certification are separate from the ephemeral CI development signature/WACK.
 
-The Store workflow retains only the unsigned submission, checksum, lineage and
-ACL receipt beneath a pre-provisioned local fixed-NTFS root limited to the
-runner account, SYSTEM and Administrators. Its signed QA copy, certificate,
-detailed WACK and SBOM inputs are deleted, and no Store MSIX is uploaded to
-GitHub. Passing CI or WACK does not guarantee Microsoft Store
-certification. GitHub distribution is a separately trusted/timestamped portable
-ZIP and is not the Store candidate.
+The interactive WACK workflow retains the unsigned submission, checksum,
+lineage and ACL receipt beneath a pre-provisioned local fixed-NTFS root limited
+to the runner account, SYSTEM and Administrators. Separately, an owner-dispatched
+exact protected-main hosted run may retain an unsigned Partner Center transfer
+artifact for one day with four screenshots, SPDX SBOM and two-pass lineage. It
+never includes the signed QA copy, certificate or private key and is not a
+GitHub Release. Passing CI, hosted lifecycle QA or WACK does not guarantee
+Microsoft Store certification. GitHub end-user distribution is a separately
+trusted/timestamped portable ZIP and is not the Store candidate.

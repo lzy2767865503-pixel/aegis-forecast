@@ -35,6 +35,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Require exact protected main for a Partner Center artifact dispatch
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Set-StrictMode -Version Latest
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_ACTOR -cne 'lzy2767865503-pixel' -or
+              $env:GITHUB_TRIGGERING_ACTOR -cne 'lzy2767865503-pixel') {
+            throw 'Partner Center artifact dispatch is restricted to the owner on protected main.'
+          }
+          & git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch origin/main.' }
+          $Head = (& git rev-parse HEAD).Trim()
+          $Main = (& git rev-parse refs/remotes/origin/main).Trim()
+          if ($Head -cnotmatch '^[0-9a-f]{40}$' -or $Head -cne $Main -or $Head -cne $env:GITHUB_SHA) {
+            throw 'Partner Center artifact checkout is not exact origin/main.'
+          }
+          $Ruleset = & gh api 'repos/lzy2767865503-pixel/aegis-forecast/rulesets/21633557' | ConvertFrom-Json
+          $RuleTypes = @($Ruleset.rules | ForEach-Object type | Sort-Object)
+          if ($LASTEXITCODE -ne 0 -or [long]$Ruleset.id -ne 21633557 -or
+              $Ruleset.enforcement -cne 'active' -or $Ruleset.target -cne 'branch' -or
+              @($Ruleset.bypass_actors).Count -ne 0 -or
+              (@($Ruleset.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
+              @($Ruleset.conditions.ref_name.exclude).Count -ne 0 -or
+              ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks') {
+            throw 'The exact no-bypass protected-main ruleset is not active.'
+          }
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: 3.13.14
@@ -172,6 +203,13 @@ jobs:
         run: >-
           ./scripts/windows/generate-hosted-candidate-evidence.ps1
           -OutputRoot (Join-Path $env:RUNNER_TEMP 'aegis-hosted-candidate-evidence')
+      - name: Prepare protected-main unsigned Partner Center MSIX, screenshots, SPDX SBOM and lineage
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: >-
+          ./scripts/windows/prepare-hosted-store-upload.ps1
+          -EvidenceRoot (Join-Path $env:RUNNER_TEMP 'aegis-hosted-candidate-evidence')
+          -OutputRoot (Join-Path $env:RUNNER_TEMP 'aegis-partner-center-upload')
 
       - name: Remove the exact development certificate and all software work products
         if: always()
@@ -254,3 +292,101 @@ jobs:
           retention-days: 1
           compression-level: 0
           include-hidden-files: false
+
+      - name: Revalidate the protected-main Partner Center upload bundle after private-work cleanup
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Root = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'aegis-partner-center-upload')).TrimEnd('\')
+          $TempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          if (-not $Root.StartsWith($TempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+              [IO.Path]::GetFileName($Root) -cne 'aegis-partner-center-upload') {
+            throw 'Partner Center upload staging escaped RUNNER_TEMP.'
+          }
+          $RootItem = Get-Item -LiteralPath $Root -Force
+          $Entries = @(Get-ChildItem -LiteralPath $Root -Force -Recurse)
+          $Files = @($Entries | Where-Object { -not $_.PSIsContainer })
+          if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+              @($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0 -or
+              @($Files | Where-Object Extension -CEQ '.msix').Count -ne 1 -or
+              @($Files | Where-Object { $_.Extension -cnotin @('.msix', '.json', '.png', '.txt') }).Count -ne 0 -or
+              @($Files | Where-Object { $_.Name -match '(?i)(signed-dev|\.cer$|\.pfx$)' }).Count -ne 0) {
+            throw 'Partner Center upload staging contains an unsafe entry or development artifact.'
+          }
+          $Lineage = Get-Content -Raw -LiteralPath (Join-Path $Root 'partner-center-upload.json') | ConvertFrom-Json
+          if ([int]$Lineage.schemaVersion -ne 1 -or $Lineage.productId -cne '9NWTH4KJX5GW' -or
+              $Lineage.packageIdentity -cne 'LAIZEYU.QuantScenarioStudiobyLAIZEYU' -or
+              $Lineage.technicalPublisher -cne 'CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8' -or
+              $Lineage.author -cne 'LAI ZEYU（来泽宇）' -or $Lineage.sourceCommit -cne $env:GITHUB_SHA -or
+              [int]$Lineage.staticValidationPasses -ne 2 -or [int]$Lineage.runtimeLifecyclePasses -ne 2 -or
+              @($Lineage.independentLaunchNonces | Sort-Object -Unique).Count -ne 2 -or
+              @($Lineage.screenshots).Count -ne 4 -or @($Lineage.sbom).Count -lt 1 -or
+              $Lineage.submissionSignatureStatus -cne 'UNSIGNED_FOR_PARTNER_CENTER' -or
+              $Lineage.submissionStatus -cne 'NOT_SUBMITTED' -or $Lineage.certificationStatus -cne 'NOT_CERTIFIED') {
+            throw 'Partner Center upload lineage is incomplete or not exact protected main.'
+          }
+          $Package = Join-Path $Root ([string]$Lineage.submissionPackageFile)
+          $Signature = Get-AuthenticodeSignature -LiteralPath $Package
+          if ($Signature.Status -ne [Management.Automation.SignatureStatus]::NotSigned -or
+              $Signature.SignerCertificate -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $Package).Hash.ToLowerInvariant() -cne $Lineage.submissionPackageSha256 -or
+              (Get-Item -LiteralPath $Package).Length -ne [long]$Lineage.submissionPackageSize) {
+            throw 'Protected-main Partner Center MSIX is signed or changed.'
+          }
+          $SeenChecksumFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+          Get-Content -LiteralPath (Join-Path $Root 'SHA256SUMS.txt') | ForEach-Object {
+            if ($_ -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>[A-Za-z0-9._/-]+)$') {
+              throw 'Partner Center bundle checksum row is malformed.'
+            }
+            if (-not $SeenChecksumFiles.Add($Matches.name)) {
+              throw "Partner Center bundle checksum row is duplicated: $($Matches.name)"
+            }
+            $File = Join-Path $Root $Matches.name
+            if (-not (Test-Path -LiteralPath $File -PathType Leaf) -or
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant() -cne $Matches.hash) {
+              throw "Partner Center bundle checksum mismatch: $($Matches.name)"
+            }
+          }
+          $ExpectedChecksumFiles = @(
+            $Files |
+              Where-Object Name -CNE 'SHA256SUMS.txt' |
+              ForEach-Object { [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/') }
+          )
+          if ($SeenChecksumFiles.Count -ne $ExpectedChecksumFiles.Count -or
+              @($ExpectedChecksumFiles | Where-Object { -not $SeenChecksumFiles.Contains($_) }).Count -ne 0) {
+            throw 'Partner Center bundle checksums do not cover the exact full file inventory.'
+          }
+
+      - name: Upload the exact protected-main unsigned Partner Center bundle for one day
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-partner-center-upload-${{ github.sha }}
+          path: ${{ runner.temp }}/aegis-partner-center-upload
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: false
+
+      - name: Remove the exact protected-main Partner Center upload staging
+        if: always() && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $Root = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'aegis-partner-center-upload')).TrimEnd('\')
+          $TempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          if (-not $Root.StartsWith($TempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+              [IO.Path]::GetFileName($Root) -cne 'aegis-partner-center-upload') {
+            throw 'Refusing to clean unbound Partner Center upload staging.'
+          }
+          if (Test-Path -LiteralPath $Root) {
+            $Entries = @((Get-Item -LiteralPath $Root -Force); Get-ChildItem -LiteralPath $Root -Force -Recurse)
+            if (@($Entries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -ne 0) {
+              throw 'Partner Center upload staging contains a reparse point.'
+            }
+            Remove-Item -LiteralPath $Root -Recurse -Force
+          }
+          if (Test-Path -LiteralPath $Root) { throw 'Partner Center upload staging remained after cleanup.' }

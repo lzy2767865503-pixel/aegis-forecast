@@ -459,8 +459,22 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("generate-hosted-candidate-evidence.ps1", hosted)
         self.assertIn("software binary or certificate", hosted)
         self.assertIn("retention-days: 1", hosted)
-        self.assertNotIn("artifacts/candidate/QuantScenarioStudio_1.5.0.0_x64_store-unsigned.msix\n          if-no-files-found", hosted)
-        self.assertNotIn(".msix\n          if-no-files-found", hosted.lower())
+        self.assertEqual(hosted.count("actions/upload-artifact@"), 2)
+        self.assertIn("Require exact protected main for a Partner Center artifact dispatch", hosted)
+        self.assertIn("prepare-hosted-store-upload.ps1", hosted)
+        self.assertIn("aegis-partner-center-upload-${{ github.sha }}", hosted)
+        self.assertIn("path: ${{ runner.temp }}/aegis-partner-center-upload", hosted)
+        self.assertIn("UNSIGNED_FOR_PARTNER_CENTER", hosted)
+        partner_upload = hosted.split(
+            "Upload the exact protected-main unsigned Partner Center bundle for one day",
+            1,
+        )[1].split(
+            "Remove the exact protected-main Partner Center upload staging",
+            1,
+        )[0]
+        self.assertNotIn("signed-dev", partner_upload)
+        self.assertNotIn(".cer", partner_upload.lower())
+        self.assertNotIn(".pfx", partner_upload.lower())
         self.assertNotIn("contents: write", hosted)
 
         hosted_evidence = (
@@ -472,6 +486,22 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("developmentCertificateUploaded = $false", hosted_evidence)
         self.assertIn("packageAbsentAfterUninstall", hosted_evidence)
         self.assertIn("sidecarExitedViaParentWatchdog", hosted_evidence)
+        hosted_upload = (
+            root / "scripts/windows/prepare-hosted-store-upload.ps1"
+        ).read_text(encoding="utf-8")
+        for token in (
+            "9NWTH4KJX5GW",
+            "LAIZEYU.QuantScenarioStudiobyLAIZEYU",
+            "CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8",
+            "Microsoft SPDX SBOM generation",
+            "staticValidationPasses = 2",
+            "runtimeLifecyclePasses = 2",
+            'submissionSignatureStatus = "UNSIGNED_FOR_PARTNER_CENTER"',
+            'submissionStatus = "NOT_SUBMITTED"',
+            'certificationStatus = "NOT_CERTIFIED"',
+        ):
+            self.assertIn(token, hosted_upload)
+        self.assertNotIn("signedDevelopmentQaPackageFile -Destination", hosted_upload)
 
     def test_windows_scripts_fail_closed_and_embed_source_hash_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
