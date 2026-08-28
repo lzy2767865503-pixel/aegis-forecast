@@ -58,9 +58,16 @@ jobs:
           }
           $Ruleset = & gh api 'repos/lzy2767865503-pixel/aegis-forecast/rulesets/21633557' | ConvertFrom-Json
           $RuleTypes = @($Ruleset.rules | ForEach-Object type | Sort-Object)
+          # GitHub's workflow token can omit an empty bypass_actors property.
+          # The immutable reviewed updated_at value makes an omitted empty array
+          # fail closed if the administrator later changes the ruleset.
+          $BypassProperty = $Ruleset.PSObject.Properties['bypass_actors']
+          $BypassActorCount = if ($null -eq $BypassProperty) { 0 } else { @($BypassProperty.Value).Count }
+          $RulesetUpdatedAt = ([DateTimeOffset]$Ruleset.updated_at).ToUnixTimeMilliseconds()
           if ($LASTEXITCODE -ne 0 -or [long]$Ruleset.id -ne 21633557 -or
               $Ruleset.enforcement -cne 'active' -or $Ruleset.target -cne 'branch' -or
-              @($Ruleset.bypass_actors).Count -ne 0 -or
+              $RulesetUpdatedAt -ne 1787819788625 -or
+              $BypassActorCount -ne 0 -or
               (@($Ruleset.conditions.ref_name.include) -join '|') -cne 'refs/heads/main' -or
               @($Ruleset.conditions.ref_name.exclude).Count -ne 0 -or
               ($RuleTypes -join '|') -cne 'deletion|non_fast_forward|pull_request|required_status_checks') {
