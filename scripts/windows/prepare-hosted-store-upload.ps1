@@ -172,11 +172,13 @@ try {
     $Namespace.AddNamespace("m", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
     $Identity = $Manifest.SelectSingleNode("/m:Package/m:Identity", $Namespace)
     $Properties = $Manifest.SelectSingleNode("/m:Package/m:Properties", $Namespace)
-    $Languages = @($Manifest.SelectNodes("/m:Package/m:Resources/m:Resource", $Namespace) | ForEach-Object { $_.Language })
+    $Languages = @($Manifest.SelectNodes("/m:Package/m:Resources/m:Resource", $Namespace) | ForEach-Object {
+        ([string]$_.Language).ToLowerInvariant()
+    })
     if ($Identity.Name -cne $ExpectedIdentity -or $Identity.Publisher -cne $ExpectedPublisher -or
         $Identity.Version -cne "1.5.0.0" -or $Identity.ProcessorArchitecture -cne "x64" -or
         $Properties.DisplayName -cne $ExpectedProduct -or $Properties.PublisherDisplayName -cne "LAI ZEYU" -or
-        ($Languages -join "|") -cne "zh-CN" -or
+        $Languages.Count -ne 1 -or $Languages[0] -cne "zh-cn" -or
         (Test-Path -LiteralPath (Join-Path $PayloadRoot "AppxSignature.p7x")) -or
         (Test-Path -LiteralPath (Join-Path $PayloadRoot "AppxMetadata\CodeIntegrity.cat"))) {
         throw "Unpacked unsigned Store manifest identity, language or signature boundary is invalid."

@@ -493,6 +493,8 @@ class StorePackageBoundaryTests(unittest.TestCase):
             "9NWTH4KJX5GW",
             "LAIZEYU.QuantScenarioStudiobyLAIZEYU",
             "CN=A5F91D0A-30C6-48EE-944F-B767FA872BE8",
+            "ToLowerInvariant()",
+            '$Languages.Count -ne 1 -or $Languages[0] -cne "zh-cn"',
             "Microsoft SPDX SBOM generation",
             "staticValidationPasses = 2",
             "runtimeLifecyclePasses = 2",
