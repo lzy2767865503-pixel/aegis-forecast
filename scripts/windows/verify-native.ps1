@@ -100,7 +100,7 @@ $PreexistingFamilyRoots = @(
         Where-Object { $_.Name.StartsWith($FamilyPrefix, [StringComparison]::OrdinalIgnoreCase) }
 )
 if ($PreexistingFamilyRoots.Count -ne 0) { throw "Fail-closed: a LocalState/PFN root for the candidate identity already exists." }
-$TrustedPeoplePath = "Cert:\CurrentUser\TrustedPeople\$($Certificate.Thumbprint)"
+$TrustedPeoplePath = "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)"
 if (Test-Path -LiteralPath $TrustedPeoplePath) { throw "Fail-closed: the exact QA certificate was already trusted." }
 
 $CertificateImportAttempted = $false
@@ -219,12 +219,12 @@ function Capture-NativeOwnedObjects {
 }
 try {
     $CertificateImportAttempted = $true
-    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
     if ($Imported.Thumbprint -ne $Certificate.Thumbprint -or $Imported.Subject -cne $ExpectedTechnicalPublisher) { throw "Trusted technical certificate identity mismatch." }
-    $Signature = Get-AuthenticodeSignature -LiteralPath $PackagePath
-    if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint -or $Signature.SignerCertificate.Subject -cne $ExpectedTechnicalPublisher) {
-        throw "MSIX signature does not match the Partner Center technical Publisher certificate."
-    }
+    $Signature = Assert-AegisValidAppPackageSignature `
+        -Path $PackagePath `
+        -ExpectedCertificateThumbprint $Certificate.Thumbprint `
+        -ExpectedCertificateSubject $ExpectedTechnicalPublisher
 
     $MakeAppx = Get-AegisTrustedWindowsSdkTool -Name "makeappx.exe"
     $TemporaryRoot = Join-Path $env:RUNNER_TEMP ("aegis-native-qa-$QaRound-" + [guid]::NewGuid().ToString("N"))
@@ -621,7 +621,7 @@ try {
         } catch { $FinalErrors.Add("fallback parent: $($_.Exception.Message)") }
     }
     if ($CertificateImportAttempted) {
-        try { & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("CurrentUser\TrustedPeople")
+        try { & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("LocalMachine\TrustedPeople")
         } catch { $FinalErrors.Add("certificate: $($_.Exception.Message)") }
     }
     if ($TemporaryRoot) {

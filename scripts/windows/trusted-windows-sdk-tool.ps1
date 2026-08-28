@@ -108,6 +108,40 @@ function Get-AegisTrustedWindowsSdkTool {
     return Assert-AegisTrustedMicrosoftTool -Tool $Candidates[0] -WindowsKitsRoot $WindowsKitsRoot -Label $Name
 }
 
+function Assert-AegisValidAppPackageSignature {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedCertificateThumbprint,
+        [Parameter(Mandatory = $true)][string]$ExpectedCertificateSubject
+    )
+    if (-not $IsWindows) { throw "App-package signature verification requires Windows." }
+    $ExactPath = (Resolve-Path -LiteralPath $Path).Path
+    if ([IO.Path]::GetExtension($ExactPath).ToLowerInvariant() -cnotin @('.msix', '.appx')) {
+        throw "App-package signature verification requires one exact MSIX or APPX file."
+    }
+    $ExpectedThumbprint = $ExpectedCertificateThumbprint.Trim().ToUpperInvariant()
+    if ($ExpectedThumbprint -cnotmatch '^[0-9A-F]{40}$' -or
+        [string]::IsNullOrWhiteSpace($ExpectedCertificateSubject) -or
+        $ExpectedCertificateSubject.Length -gt 512 -or $ExpectedCertificateSubject -match '[\r\n]') {
+        throw "Expected app-package signer identity is malformed."
+    }
+    $Signature = Get-AuthenticodeSignature -LiteralPath $ExactPath
+    if ($Signature.Status -cnotin @(
+            [Management.Automation.SignatureStatus]::Valid,
+            [Management.Automation.SignatureStatus]::UnknownError
+        ) -or -not $Signature.SignerCertificate -or
+        $Signature.SignerCertificate.Thumbprint -cne $ExpectedThumbprint -or
+        $Signature.SignerCertificate.Subject -cne $ExpectedCertificateSubject) {
+        throw "App-package signature does not expose the exact expected signer certificate."
+    }
+    $Signtool = Get-AegisTrustedWindowsSdkTool -Name 'signtool.exe'
+    & $Signtool verify /pa /all /v $ExactPath | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft SignTool rejected the app-package signature with exit code $LASTEXITCODE."
+    }
+    return $Signature
+}
+
 function Get-AegisTrustedWindowsAppCertificationKit {
     param(
         [Parameter(Mandatory = $true)][string]$ApprovedFileVersion,

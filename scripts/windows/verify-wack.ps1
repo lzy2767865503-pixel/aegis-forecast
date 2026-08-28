@@ -265,7 +265,7 @@ $PreexistingFamilyRoots = @(
         Where-Object { $_.Name.StartsWith($FamilyPrefix, [StringComparison]::OrdinalIgnoreCase) }
 )
 if ($PreexistingFamilyRoots.Count -ne 0) { throw "Fail-closed: WACK found a preexisting LocalState/PFN root for this identity." }
-$TrustedPeoplePath = "Cert:\CurrentUser\TrustedPeople\$($Certificate.Thumbprint)"
+$TrustedPeoplePath = "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)"
 if (Test-Path -LiteralPath $TrustedPeoplePath) { throw "Fail-closed: the exact WACK certificate was already trusted." }
 $WindowsTempRoot = [IO.Path]::GetFullPath((Join-Path $env:WINDIR "Temp")).TrimEnd("\")
 $PreexistingAppCertRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -532,12 +532,12 @@ function Remove-WackOwnedObjects {
 
 try {
     $CertificateImportAttempted = $true
-    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+    $Imported = Import-Certificate -FilePath $CerPath -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
     if ($Imported.Thumbprint -ne $Certificate.Thumbprint -or $Imported.Subject -cne $ExpectedTechnicalPublisher) { throw "WACK certificate import mismatch." }
-    $Signature = Get-AuthenticodeSignature -LiteralPath $PackagePath
-    if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint -or $Signature.SignerCertificate.Subject -cne $ExpectedTechnicalPublisher) {
-        throw "WACK package signature does not match the technical Publisher certificate."
-    }
+    $Signature = Assert-AegisValidAppPackageSignature `
+        -Path $PackagePath `
+        -ExpectedCertificateThumbprint $Certificate.Thumbprint `
+        -ExpectedCertificateSubject $ExpectedTechnicalPublisher
     if (-not (Test-Path -LiteralPath $AppCert)) { throw "Windows App Certification Kit appcert.exe was not found." }
     if ((Test-Path $Report) -or (Test-Path $PowerShellTranscript) -or (Test-Path $AppCertLog)) { throw "Stale WACK evidence survived the clean report-root reset." }
 
@@ -676,7 +676,7 @@ try {
     Remove-WackOwnedObjects -Errors $FinalErrors
     if ($CertificateImportAttempted) {
         try {
-            & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("CurrentUser\TrustedPeople")
+            & scripts\windows\remove-development-certificate.ps1 -Thumbprint $Certificate.Thumbprint -StoreLocations @("LocalMachine\TrustedPeople")
         } catch { $FinalErrors.Add("certificate: $($_.Exception.Message)") }
     }
     if ($FinalErrors.Count -ne 0) { throw "WACK verification/cleanup failures: $($FinalErrors -join ' | ')" }

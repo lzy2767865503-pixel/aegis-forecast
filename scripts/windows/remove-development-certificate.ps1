@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Thumbprint,
-    [string[]]$StoreLocations = @("CurrentUser\My", "CurrentUser\Root", "CurrentUser\TrustedPeople"),
+    [string[]]$StoreLocations = @("CurrentUser\My", "CurrentUser\Root", "LocalMachine\TrustedPeople"),
     [switch]$DeletePrivateKey,
     [string]$ExpectedCngKeyName,
     [string]$ExpectedCngKeyUniqueName,
@@ -16,7 +16,7 @@ if ($ExactThumbprint -cnotmatch "^[0-9A-F]{40}$") {
     throw "Refusing certificate cleanup: exact SHA-1 thumbprint is missing or invalid."
 }
 foreach ($Location in $StoreLocations) {
-    if ($Location -cnotin @("CurrentUser\My", "CurrentUser\Root", "CurrentUser\TrustedPeople")) {
+    if ($Location -cnotin @("CurrentUser\My", "CurrentUser\Root", "CurrentUser\TrustedPeople", "LocalMachine\TrustedPeople")) {
         throw "Refusing unapproved certificate store location: $Location"
     }
 }

@@ -113,7 +113,7 @@ jobs:
           Export-Certificate -Cert $Certificate -FilePath $Cer | Out-Null
           Write-Host 'Hosted development certificate exported.'
           $PublicCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Cer)
-          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+          $TrustedPeople = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'LocalMachine')
           try {
             $TrustedPeople.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
             $TrustedPeople.Add($PublicCertificate)
@@ -121,7 +121,7 @@ jobs:
             $TrustedPeople.Dispose()
             $PublicCertificate.Dispose()
           }
-          $ImportedTrust = Get-Item -LiteralPath "Cert:\CurrentUser\TrustedPeople\$($Certificate.Thumbprint)" -ErrorAction Stop
+          $ImportedTrust = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($Certificate.Thumbprint)" -ErrorAction Stop
           if ($ImportedTrust.Thumbprint -cne $Certificate.Thumbprint -or $ImportedTrust.HasPrivateKey) {
             throw 'Hosted build-only public trust differs from the development certificate.'
           }
@@ -147,8 +147,8 @@ jobs:
         run: |
           ./scripts/windows/remove-development-certificate.ps1 `
             -Thumbprint '${{ steps.cert.outputs.thumbprint }}' `
-            -StoreLocations @('CurrentUser\TrustedPeople')
-          if (Test-Path -LiteralPath 'Cert:\CurrentUser\TrustedPeople\${{ steps.cert.outputs.thumbprint }}') {
+            -StoreLocations @('LocalMachine\TrustedPeople')
+          if (Test-Path -LiteralPath 'Cert:\LocalMachine\TrustedPeople\${{ steps.cert.outputs.thumbprint }}') {
             throw 'Hosted build-only trust remained before native QA.'
           }
       - name: Native install/start/core-scenario lifecycle round 1
@@ -183,7 +183,7 @@ jobs:
           if ($Thumbprint) {
             ./scripts/windows/remove-development-certificate.ps1 `
               -Thumbprint $Thumbprint `
-              -StoreLocations @('CurrentUser\My', 'CurrentUser\Root', 'CurrentUser\TrustedPeople') `
+              -StoreLocations @('CurrentUser\My', 'CurrentUser\Root', 'CurrentUser\TrustedPeople', 'LocalMachine\TrustedPeople') `
               -DeletePrivateKey `
               -ExpectedCngKeyName '${{ steps.cert.outputs.key_name }}' `
               -ExpectedCngKeyUniqueName '${{ steps.cert.outputs.key_unique_name }}' `

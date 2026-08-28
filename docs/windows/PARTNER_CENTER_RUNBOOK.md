@@ -65,8 +65,10 @@ Backup automatically:
    Delete the exact `CurrentUser\My` development certificate with
    `Remove-Item -DeleteKey`, bound to its validated thumbprint and current-user
    software-CNG key name/unique name/provider. Require the post-cleanup CNG file
-   inventory to equal the pre-create baseline; remove the Root/TrustedPeople
-   public copies only by that same thumbprint.
+   inventory to equal the pre-create baseline; remove any CurrentUser Root or
+   CurrentUser/LocalMachine TrustedPeople public copies only by that same
+   thumbprint. The elevated isolated QA runner uses LocalMachine TrustedPeople
+   because Windows app-package policy does not use CurrentUser trust reliably.
 
 Record this as a manual privacy/release gate; do not claim the application can
 change a user's OneDrive or Windows Backup settings itself.

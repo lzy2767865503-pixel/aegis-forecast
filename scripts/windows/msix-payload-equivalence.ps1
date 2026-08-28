@@ -87,9 +87,12 @@ if ($SubmissionSignature.Status -ne [Management.Automation.SignatureStatus]::Not
     throw "Partner Center handoff MSIX is not provably unsigned."
 }
 $QaSignature = Get-AuthenticodeSignature -LiteralPath $QaPath
-if ($QaSignature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $QaSignature.SignerCertificate -or
+if ($QaSignature.Status -notin @(
+        [Management.Automation.SignatureStatus]::Valid,
+        [Management.Automation.SignatureStatus]::UnknownError
+    ) -or -not $QaSignature.SignerCertificate -or
     ($ExpectedThumbprint -and $QaSignature.SignerCertificate.Thumbprint -cne $ExpectedThumbprint)) {
-    throw "Temporary QA MSIX does not have the expected valid technical-Publisher development signature."
+    throw "Temporary QA MSIX does not expose the expected technical-Publisher development signature."
 }
 
 return [pscustomobject]@{

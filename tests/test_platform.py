@@ -450,7 +450,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
             self.assertIn("Microsoft Software Key Storage Provider", candidate_workflow)
             self.assertIn("-KeyProtection None", candidate_workflow)
             self.assertNotIn("-KeySpec ", candidate_workflow)
-            self.assertIn("X509Store]::new('TrustedPeople', 'CurrentUser')", candidate_workflow)
+            self.assertIn("X509Store]::new('TrustedPeople', 'LocalMachine')", candidate_workflow)
             self.assertNotIn("-addstore Root", candidate_workflow)
             self.assertIn("Remove build-only trust before independent native QA", candidate_workflow)
         self.assertEqual(hosted.count("./scripts/windows/verify-native.ps1"), 2)
@@ -606,6 +606,7 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("FileVersionRaw", trusted_sdk)
         self.assertIn("$Current = $Tool.Directory", trusted_sdk)
         self.assertIn("[StringComparison]::OrdinalIgnoreCase", trusted_sdk)
+        self.assertIn("Assert-AegisValidAppPackageSignature", trusted_sdk)
         equivalence = (root / "scripts/windows/msix-payload-equivalence.ps1").read_text(
             encoding="utf-8"
         )
