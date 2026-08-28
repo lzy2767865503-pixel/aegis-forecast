@@ -623,6 +623,8 @@ class StorePackageBoundaryTests(unittest.TestCase):
         self.assertIn("ui_failure.json", native_qa)
         self.assertIn("malformed or unbound QA failure marker", native_qa)
         self.assertIn("Packaged app reported native QA failure", native_qa)
+        self.assertIn("Get-CanonicalJsonTimestamp", native_qa)
+        self.assertIn('[Text.Json.JsonValueKind]::String', native_qa)
         native_shell = (
             root / "desktop/windows/AegisForecast/MainWindow.xaml.cs"
         ).read_text(encoding="utf-8")

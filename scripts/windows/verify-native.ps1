@@ -15,6 +15,17 @@ function Assert-NativeSuccess([string]$Label) {
     if ($LASTEXITCODE -ne 0) { throw "$Label returned native exit code $LASTEXITCODE." }
 }
 
+function Get-CanonicalJsonTimestamp([string]$Json, [string]$Label) {
+    if ([Text.Encoding]::UTF8.GetByteCount($Json) -gt 1048576) { throw "$Label JSON exceeds the bounded size." }
+    $Document = [Text.Json.JsonDocument]::Parse($Json)
+    try {
+        $Property = $Document.RootElement.GetProperty("capturedAt")
+        if ($Property.ValueKind -ne [Text.Json.JsonValueKind]::String) { throw "$Label capturedAt is not a JSON string." }
+        $Text = $Property.GetString()
+        return [DateTimeOffset]::ParseExact($Text, "o", [Globalization.CultureInfo]::InvariantCulture)
+    } finally { $Document.Dispose() }
+}
+
 if (-not $IsWindows) { throw "Native package QA requires Windows." }
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
@@ -360,10 +371,15 @@ try {
 
     Start-Process explorer.exe "shell:AppsFolder\$InstalledFamilyName!App"
     $Marker = $null
+    $MarkerJson = $null
     for ($Attempt = 0; $Attempt -lt 180; $Attempt++) {
         if (Test-Path $FailureMarker) {
             $Failure = $null
-            try { $Failure = Get-Content -Raw -LiteralPath $FailureMarker | ConvertFrom-Json } catch { $Failure = $null }
+            $FailureJson = $null
+            try {
+                $FailureJson = Get-Content -Raw -LiteralPath $FailureMarker
+                $Failure = $FailureJson | ConvertFrom-Json
+            } catch { $Failure = $null }
             if ($Failure) {
                 $FailureKeys = @($Failure.PSObject.Properties.Name | Sort-Object)
                 if (($FailureKeys -join '|') -cne 'capturedAt|error|nonce|packageSha256|product|qaRound|sourceCommit' -or
@@ -374,7 +390,7 @@ try {
                     ([string]$Failure.error).Length -gt 2048) {
                     throw "Packaged app emitted a malformed or unbound QA failure marker."
                 }
-                $FailureCapturedAt = [DateTimeOffset]::ParseExact([string]$Failure.capturedAt, "o", [Globalization.CultureInfo]::InvariantCulture)
+                $FailureCapturedAt = Get-CanonicalJsonTimestamp -Json $FailureJson -Label "Packaged app QA failure marker"
                 if ($FailureCapturedAt -lt [DateTimeOffset]::UtcNow.AddMinutes(-3) -or $FailureCapturedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(1)) {
                     throw "Packaged app QA failure marker is stale or future-dated."
                 }
@@ -382,7 +398,10 @@ try {
             }
         }
         if (Test-Path $ReadyMarker) {
-            try { $Marker = Get-Content -Raw -LiteralPath $ReadyMarker | ConvertFrom-Json } catch { $Marker = $null }
+            try {
+                $MarkerJson = Get-Content -Raw -LiteralPath $ReadyMarker
+                $Marker = $MarkerJson | ConvertFrom-Json
+            } catch { $Marker = $null; $MarkerJson = $null }
             if ($Marker) { break }
         }
         Start-Sleep -Milliseconds 500
@@ -487,7 +506,7 @@ try {
     if ($ShellProcessPath -ne $ExpectedShellPath -or $BackendProcessPath -ne $ExpectedBackendPath) { throw "Running shell/sidecar paths are not the installed package binaries." }
     if ($Marker.shellExecutablePath -ne $ExpectedShellPath -or $Marker.backendExecutablePath -ne $ExpectedBackendPath) { throw "DOM marker executable paths are invalid." }
     if (-not $ShellProcessPath.StartsWith($InstallPrefix, [StringComparison]::OrdinalIgnoreCase) -or -not $BackendProcessPath.StartsWith($InstallPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Runtime executable escaped the package install location." }
-    $MarkerCapturedAt = [DateTimeOffset]::ParseExact([string]$Marker.capturedAt, "o", [Globalization.CultureInfo]::InvariantCulture)
+    $MarkerCapturedAt = Get-CanonicalJsonTimestamp -Json $MarkerJson -Label "DOM readiness marker"
     if ($MarkerCapturedAt -lt [DateTimeOffset]::UtcNow.AddMinutes(-3) -or $MarkerCapturedAt -gt [DateTimeOffset]::UtcNow.AddMinutes(1)) { throw "DOM readiness marker timestamp is not fresh for this launch." }
     # Only after nonce, names and canonical install paths all match may these
     # PIDs become owned cleanup targets.
