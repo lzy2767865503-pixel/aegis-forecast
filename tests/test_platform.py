@@ -612,6 +612,11 @@ class StorePackageBoundaryTests(unittest.TestCase):
         )
         self.assertIn("payloadTreeSha256", equivalence)
         self.assertIn("AppxSignature.p7x", equivalence)
+        self.assertIn("AppxMetadata/CodeIntegrity.cat", equivalence)
+        self.assertIn("application/vnd.ms-appx.signature", equivalence)
+        self.assertIn("application/vnd.ms-pkiseccat", equivalence)
+        self.assertIn("must add exactly one signature mapping and one CodeIntegrity.cat mapping", equivalence)
+        self.assertIn("SignTool changed an existing content-type mapping", equivalence)
         handoff = (root / "scripts/windows/prepare-store-handoff.ps1").read_text(
             encoding="utf-8"
         )
