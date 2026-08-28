@@ -68,12 +68,27 @@ $SubmissionInventory = Get-MsixInventory -Path $SubmissionPath
 $QaInventory = Get-MsixInventory -Path $QaPath
 if ($SubmissionInventory.signatureCount -ne 0) { throw "Partner Center submission MSIX must remain unsigned and contain no AppxSignature.p7x." }
 if ($QaInventory.signatureCount -ne 1) { throw "Temporary QA MSIX must contain exactly one AppxSignature.p7x." }
-if ($SubmissionInventory.payloadFileCount -ne $QaInventory.payloadFileCount -or
-    $SubmissionInventory.payloadTreeSha256 -cne $QaInventory.payloadTreeSha256) {
-    throw "Unsigned submission and signed QA MSIX payload trees differ."
-}
+$SubmissionByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+foreach ($Row in $SubmissionInventory.rows) { $SubmissionByPath.Add([string]$Row.path, $Row) }
 $QaByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($Row in $QaInventory.rows) { $QaByPath.Add([string]$Row.path, $Row) }
+if ($SubmissionInventory.payloadFileCount -ne $QaInventory.payloadFileCount -or
+    $SubmissionInventory.payloadTreeSha256 -cne $QaInventory.payloadTreeSha256) {
+    $Differences = [Collections.Generic.List[string]]::new()
+    foreach ($Path in @($SubmissionByPath.Keys | Sort-Object)) {
+        if (-not $QaByPath.ContainsKey($Path)) { $Differences.Add("missing:$Path"); continue }
+        $Left = $SubmissionByPath[$Path]
+        $Right = $QaByPath[$Path]
+        if ([long]$Left.size -ne [long]$Right.size -or [string]$Left.sha256 -cne [string]$Right.sha256) {
+            $Differences.Add("changed:$Path")
+        }
+    }
+    foreach ($Path in @($QaByPath.Keys | Sort-Object)) {
+        if (-not $SubmissionByPath.ContainsKey($Path)) { $Differences.Add("added:$Path") }
+    }
+    $Preview = @($Differences | Select-Object -First 20) -join ', '
+    throw "Unsigned submission and signed QA MSIX payload trees differ in $($Differences.Count) entries: $Preview"
+}
 foreach ($Row in $SubmissionInventory.rows) {
     if (-not $QaByPath.ContainsKey([string]$Row.path)) { throw "QA MSIX is missing submission payload entry: $($Row.path)" }
     $QaRow = $QaByPath[[string]$Row.path]
